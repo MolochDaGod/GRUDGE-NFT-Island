@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Grudge Warlords</title>
+  <link rel="icon" href="data:,">
+  <script src="https://js.puter.com/v2/" defer></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; background: #0a0a0a; }
+    canvas { display: block; width: 100%; height: 100%; }
+
+    #hud {
+      position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+      pointer-events: none; font-family: 'Segoe UI', sans-serif; color: white;
+    }
+
+    #crosshair {
+      position: absolute; top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      width: 20px; height: 20px;
+      border: 2px solid rgba(255,255,255,0.6);
+      border-radius: 50%;
+    }
+
+    #debug {
+      position: absolute; top: 10px; left: 10px;
+      font-size: 13px; line-height: 1.5;
+      background: rgba(0,0,0,0.5); padding: 8px 12px; border-radius: 4px;
+    }
+
+    #loading {
+      position: absolute; top: 50%; left: 50%;
+      transform: translate(-50%, -50%);
+      font-size: 24px; text-align: center;
+    }
+
+    #loading .bar {
+      width: 300px; height: 6px; background: #333;
+      border-radius: 3px; margin-top: 12px;
+    }
+
+    #loading .fill {
+      width: 0%; height: 100%; background: #d4a843;
+      border-radius: 3px; transition: width 0.3s;
+    }
+
+    /* Auth screen */
+    #auth-screen {
+      position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+      background: linear-gradient(135deg, #0a0a1a 0%, #1a0a2e 50%, #0a1a1e 100%);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 100; font-family: 'Segoe UI', sans-serif;
+    }
+    .auth-box {
+      background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.15);
+      border-radius: 16px; padding: 40px; width: 400px; text-align: center;
+    }
+    .auth-box h1 { color: #d4a843; font-size: 28px; margin-bottom: 2px; }
+    .auth-box .studio { color: #666; font-size: 11px; letter-spacing: 2px; text-transform: uppercase; margin-bottom: 4px; }
+    .auth-box .subtitle { color: #888; font-size: 13px; margin-bottom: 24px; }
+    .grudge-id-badge {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: rgba(212,168,67,0.12); border: 1px solid rgba(212,168,67,0.3);
+      border-radius: 20px; padding: 4px 14px; margin-bottom: 20px;
+      font-size: 12px; color: #d4a843;
+    }
+    .grudge-id-badge .dot { width: 6px; height: 6px; border-radius: 50%; background: #d4a843; }
+    .btn-puter {
+      width: 100%; padding: 14px; border-radius: 10px; border: none;
+      background: linear-gradient(135deg, #d4a843 0%, #b8922e 100%);
+      color: #000; font-weight: 700; cursor: pointer; font-size: 15px;
+      transition: all 0.15s; margin-bottom: 16px; letter-spacing: 0.5px;
+    }
+    .btn-puter:hover { background: linear-gradient(135deg, #e4b853 0%, #d4a843 100%); transform: translateY(-1px); }
+    .btn-puter:active { transform: translateY(0); }
+    .auth-divider {
+      display: flex; align-items: center; gap: 12px;
+      margin: 16px 0; color: #444; font-size: 12px;
+    }
+    .auth-divider::before, .auth-divider::after {
+      content: ''; flex: 1; height: 1px; background: rgba(255,255,255,0.08);
+    }
+    .auth-box input {
+      width: 100%; padding: 12px 16px; margin-bottom: 12px; border-radius: 8px;
+      border: 1px solid rgba(255,255,255,0.15); background: rgba(0,0,0,0.3);
+      color: #eee; font-size: 14px; outline: none;
+    }
+    .auth-box input:focus { border-color: #d4a843; }
+    .auth-box input::placeholder { color: #666; }
+    .auth-btns { display: flex; gap: 8px; margin-top: 8px; }
+    .auth-btns button {
+      flex: 1; padding: 12px; border-radius: 8px; border: none;
+      font-weight: 600; cursor: pointer; font-size: 14px; transition: all 0.15s;
+    }
+    .btn-login { background: rgba(212,168,67,0.2); color: #d4a843; }
+    .btn-login:hover { background: rgba(212,168,67,0.3); }
+    .btn-register { background: rgba(255,255,255,0.08); color: #ccc; border: 1px solid rgba(255,255,255,0.15) !important; }
+    .btn-register:hover { background: rgba(255,255,255,0.12); }
+    .btn-guest {
+      width: 100%; margin-top: 16px; padding: 10px; border-radius: 8px;
+      background: none; border: 1px solid rgba(255,255,255,0.1) !important;
+      color: #666; cursor: pointer; font-size: 13px;
+    }
+    .btn-guest:hover { color: #aaa; border-color: rgba(255,255,255,0.2) !important; }
+    #auth-msg { color: #ef4444; font-size: 13px; margin-top: 12px; min-height: 18px; }
+    #auth-msg.success { color: #4ade80; }
+  </style>
+</head>
+<body>
+  <!-- Auth Screen -->
+  <div id="auth-screen">
+    <div class="auth-box">
+      <div class="studio">Grudge Studio</div>
+      <h1>GRUDGE WARLORDS</h1>
+      <div class="subtitle">Souls-Like Voxel RPG</div>
+      <div class="grudge-id-badge"><span class="dot"></span> Grudge ID</div>
+      <button class="btn-puter" id="auth-puter">Sign in with Grudge ID</button>
+      <div class="auth-divider">or use credentials</div>
+      <input type="text" id="auth-username" placeholder="Username" autocomplete="off" />
+      <input type="password" id="auth-password" placeholder="Password" />
+      <div class="auth-btns">
+        <button class="btn-login" id="auth-login">Login</button>
+        <button class="btn-register" id="auth-register">Register</button>
+      </div>
+      <button class="btn-guest" id="auth-guest">Play as Guest</button>
+      <div id="auth-msg"></div>
+    </div>
+  </div>
+
+  <div id="hud">
+    <div id="crosshair"></div>
+    <div id="debug">
+      <div>Grudge Warlords v0.1</div>
+      <div id="fps">FPS: --</div>
+      <div id="pos">Pos: --</div>
+      <div id="chunks">Chunks: --</div>
+      <div id="tris">Tris: --</div>
+      <div id="anim">Anim: --</div>
+      <div id="auth-status">Auth: --</div>
+    </div>
+    <div id="loading">
+      <div>⚔ GRUDGE WARLORDS ⚔</div>
+      <div style="font-size:14px; margin-top:4px; opacity:0.7;">Generating world...</div>
+      <div class="bar"><div class="fill" id="load-fill"></div></div>
+    </div>
+  </div>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>

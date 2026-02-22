@@ -1,0 +1,16 @@
+{
+  "name": "grudge-voxel",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Grudge Warlords - Standalone Browser Voxel RPG",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:client\"",
+    "dev:client": "npm run dev --prefix client",
+    "dev:server": "npm run dev --prefix server",
+    "build": "npm run build --prefix shared && npm run build --prefix server && npm run build --prefix client"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "typescript": "^5.7.0"
+  }
+}
