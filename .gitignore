@@ -26,3 +26,4 @@ client/public/models/
 .env
 .env.local
 .env.production
+.vercel

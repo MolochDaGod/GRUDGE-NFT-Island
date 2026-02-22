@@ -347,19 +347,39 @@ function updatePhysics(dt: number) {
 let ws: WebSocket | null = null;
 let connected = false;
 
+/** Are we running on a production HTTPS host (no local game server)? */
+const isRemoteHost = window.location.protocol === 'https:'
+  && !window.location.hostname.match(/^(localhost|127\.0\.0\.1)$/);
+
 function connectToServer() {
-  // In production, use wss:// against the deployed game server.
-  // Set VITE_WS_URL in Vercel env vars (e.g. wss://grudge-server.fly.dev).
-  // In dev, falls back to ws://localhost:3000.
-  const wsUrl = import.meta.env.VITE_WS_URL
-    || `ws://${window.location.hostname || 'localhost'}:3000`;
+  // Explicit env override (set VITE_WS_URL in Vercel for deployed game server)
+  let wsUrl = import.meta.env.VITE_WS_URL || '';
+
+  if (!wsUrl) {
+    if (isRemoteHost) {
+      // No game server configured yet — run in offline/singleplayer mode
+      console.log('[Client] No game server configured — running offline');
+      offlineSpawn();
+      return;
+    }
+    // Local dev: connect to localhost game server
+    wsUrl = `ws://${window.location.hostname || 'localhost'}:3000`;
+  }
+
   console.log(`[Client] Connecting to ${wsUrl}...`);
-  ws = new WebSocket(wsUrl);
+
+  try {
+    ws = new WebSocket(wsUrl);
+  } catch (e) {
+    console.warn('[Client] WebSocket creation failed:', e);
+    offlineSpawn();
+    return;
+  }
 
   ws.onopen = () => {
     console.log('[Client] Connected to server');
     connected = true;
-  ws!.send(JSON.stringify({
+    ws!.send(JSON.stringify({
       type: MessageType.JOIN,
       data: grudgeAuth.getJoinPayload(),
     }));
@@ -374,11 +394,26 @@ function connectToServer() {
     }
   };
 
+  ws.onerror = () => {
+    console.warn('[Client] WebSocket error — falling back to offline');
+  };
+
   ws.onclose = () => {
     console.log('[Client] Disconnected');
     connected = false;
-    setTimeout(connectToServer, 3000);
+    // Only retry if we have a configured server URL
+    if (import.meta.env.VITE_WS_URL) {
+      setTimeout(connectToServer, 5000);
+    }
   };
+}
+
+/** Spawn the player locally when no game server is available */
+function offlineSpawn() {
+  controller.setSpawn(0, 80, 0);
+  const loadingEl = document.getElementById('loading');
+  if (loadingEl) loadingEl.style.display = 'none';
+  console.log('[Client] Offline mode — spawned at 0, 80, 0');
 }
 
 function handleServerMessage(msg: { type: string; data: any }) {
