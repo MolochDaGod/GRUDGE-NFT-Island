@@ -147,7 +147,11 @@ class AssetLoader {
 
     this.emitProgress(2, 3, `Setting up animations...`);
 
-    // 3. Scale to game world (1.8 blocks tall)
+    // 3. Inspect model hierarchy + hide accessories before scaling
+    this.inspectModel(group, race);
+    this.hideAccessories(group);
+
+    // 4. Scale to game world (1.8 blocks tall) — measured from BODY only
     this.autoScale(group, 1.8);
     this.enableShadows(group);
 
@@ -189,6 +193,8 @@ class AssetLoader {
 
     this.emitProgress(1, 3, 'Scaling & setting up...');
 
+    this.inspectModel(group, 'racalvin');
+    this.hideAccessories(group);
     this.autoScale(group, 1.8);
     this.enableShadows(group);
 
@@ -493,6 +499,78 @@ class AssetLoader {
     });
   }
 
+  // ── Warlord Kit Model Helpers ──────────────────────────────
+
+  /**
+   * Warlord Kit "_customizable" FBX models ship with ALL accessories
+   * visible (weapons, shields, helmets, shoulder pads, etc.).
+   * Hide everything except the base body + head so the character
+   * loads "naked" — equipment gets attached to hand bones separately.
+   *
+   * Accessory naming patterns (consistent across all races):
+   *   weapon, shield, bow, quiver, staff, helm, helmet, hat,
+   *   shoulder, cape, banner, wing, horn, tooth, chain, belt_extra
+   */
+  private hideAccessories(group: THREE.Group): void {
+    const ACCESSORY_PATTERNS = [
+      'weapon', 'shield', 'bow', 'quiver', 'staff', 'sword', 'axe',
+      'mace', 'hammer', 'spear', 'dagger', 'wand',
+      'helm', 'helmet', 'hat', 'crown', 'hood', 'mask',
+      'shoulder', 'pauldron', 'cape', 'cloak', 'mantle',
+      'banner', 'flag', 'wing', 'horn', 'tooth', 'chain',
+      'belt_extra', 'trophy', 'pouch', 'book', 'orb', 'lantern',
+    ];
+
+    let hidden = 0;
+    group.traverse((child) => {
+      if (!(child as THREE.Mesh).isMesh) return;
+      const name = child.name.toLowerCase();
+
+      // Check if this mesh matches any accessory pattern
+      const isAccessory = ACCESSORY_PATTERNS.some(p => name.includes(p));
+      if (isAccessory) {
+        child.visible = false;
+        hidden++;
+      }
+    });
+
+    if (hidden > 0) {
+      console.log(`[AssetLoader] Hidden ${hidden} accessory meshes`);
+    }
+  }
+
+  /** Log the full mesh hierarchy of a model for debugging */
+  private inspectModel(group: THREE.Group, label: string): void {
+    const meshes: string[] = [];
+    const bones: string[] = [];
+
+    group.traverse((child) => {
+      if ((child as THREE.Mesh).isMesh) {
+        const mesh = child as THREE.Mesh;
+        const bbox = new THREE.Box3().setFromObject(mesh);
+        const size = new THREE.Vector3();
+        bbox.getSize(size);
+        meshes.push(`  MESH: "${child.name}" size=(${size.x.toFixed(1)}, ${size.y.toFixed(1)}, ${size.z.toFixed(1)})`);
+      }
+      if ((child as THREE.Bone).isBone) {
+        if (child.name.toLowerCase().includes('hand') || child.name.toLowerCase().includes('weapon')) {
+          bones.push(`  BONE: "${child.name}"`);
+        }
+      }
+    });
+
+    // Overall bbox
+    const bbox = new THREE.Box3().setFromObject(group);
+    const size = new THREE.Vector3();
+    bbox.getSize(size);
+
+    console.log(`[AssetLoader] Model "${label}" — ${meshes.length} meshes, native size=(${size.x.toFixed(1)}, ${size.y.toFixed(1)}, ${size.z.toFixed(1)})`);
+    console.log(meshes.join('\n'));
+    if (bones.length > 0) {
+      console.log(`[AssetLoader] Attachment bones:\n${bones.join('\n')}`);
+    }
+  }
+
   // ── Query helpers ───────────────────────────────────────────
 
   /** Get all available races from the manifest */
@@ -690,17 +768,42 @@ class AssetLoader {
     });
   }
 
+  /**
+   * Scale a model so its VISIBLE meshes fit the target height.
+   * Only measures visible children so hidden accessories don't inflate the bbox.
+   */
   private autoScale(group: THREE.Group, targetHeight: number) {
-    const bbox = new THREE.Box3().setFromObject(group);
+    const bbox = new THREE.Box3();
+    let hasVisible = false;
+
+    group.traverse((child) => {
+      const mesh = child as THREE.Mesh;
+      if (mesh.isMesh && mesh.visible) {
+        bbox.expandByObject(mesh);
+        hasVisible = true;
+      }
+    });
+
+    if (!hasVisible) {
+      // Fallback: measure everything
+      bbox.setFromObject(group);
+    }
+
     const currentHeight = bbox.max.y - bbox.min.y;
     if (currentHeight <= 0) return;
 
     const scale = targetHeight / currentHeight;
     group.scale.setScalar(scale);
+    console.log(`[AssetLoader] autoScale: native=${currentHeight.toFixed(1)} → target=${targetHeight} scale=${scale.toFixed(4)}`);
 
     // Shift feet to y=0
     group.updateMatrixWorld(true);
-    const bbox2 = new THREE.Box3().setFromObject(group);
+    const bbox2 = new THREE.Box3();
+    group.traverse((child) => {
+      const mesh = child as THREE.Mesh;
+      if (mesh.isMesh && mesh.visible) bbox2.expandByObject(mesh);
+    });
+    if (bbox2.isEmpty()) bbox2.setFromObject(group);
     group.position.y -= bbox2.min.y;
   }
 
