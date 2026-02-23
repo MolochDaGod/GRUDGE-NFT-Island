@@ -14,7 +14,7 @@
 //   dispatcher.tick(dt);                           // every frame
 // ═══════════════════════════════════════════════════════════════════
 
-import { AnimState } from './AnimationStateMachine.js';
+import { AnimState } from './AnimState.js';
 
 // ── Event Types ───────────────────────────────────────────────────
 
