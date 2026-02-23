@@ -17,6 +17,10 @@ export interface MovementInput {
   strafeRight: boolean;
   sprint: boolean;
   jump: boolean;
+  /** Admin fly: ascend (Space) */
+  ascend?: boolean;
+  /** Admin fly: descend (Ctrl) */
+  descend?: boolean;
 }
 
 /** Combat triggers (true only on the frame the key was first pressed) */
@@ -38,10 +42,11 @@ class InputManager {
   private _tabPressed = false;
   private _jumpPressed = false;
 
-  // ── UI triggers (reset each frame) ──────────────────────────
+// ── UI triggers (reset each frame) ──────────────────────────
   private _escapePressed = false;
   private _iPressed = false;
   private _enterPressed = false;
+  private _adminTogglePressed = false;
 
   /** When true, movement and combat input return zeros (UI is blocking) */
   uiBlocked = false;
@@ -91,7 +96,7 @@ class InputManager {
   // ── Getters ────────────────────────────────────────────────
 
   /** Current movement intent from WASD / QE / Shift / Space */
-  getMovement(): MovementInput {
+getMovement(): MovementInput {
     if (this.uiBlocked) return { forward: false, back: false, turnLeft: false, turnRight: false, strafeLeft: false, strafeRight: false, sprint: false, jump: false };
     return {
       forward: this.held('KeyW'),
@@ -102,6 +107,8 @@ class InputManager {
       strafeRight: this.held('KeyE'),
       sprint: this.held('ShiftLeft') || this.held('ShiftRight'),
       jump: this._jumpPressed,
+      ascend: this.held('Space'),
+      descend: this.held('ControlLeft') || this.held('ControlRight'),
     };
   }
 
@@ -122,7 +129,9 @@ class InputManager {
   /** UI triggers (read once per frame) */
   get escapePressed(): boolean { return this._escapePressed; }
   get iPressed(): boolean { return this._iPressed; }
-  get enterPressed(): boolean { return this._enterPressed; }
+get enterPressed(): boolean { return this._enterPressed; }
+  /** Toggle admin fly mode (Backslash) */
+  get adminTogglePressed(): boolean { return this._adminTogglePressed; }
 
   /** Is a specific key currently held? */
   held(code: string): boolean {
@@ -148,7 +157,7 @@ class InputManager {
   // ── Frame lifecycle ────────────────────────────────────────
 
   /** Call at the END of each frame to reset rising-edge triggers */
-  endFrame(): void {
+endFrame(): void {
     this._attackPressed = false;
     this._dodgePressed = false;
     this._castPressed = false;
@@ -157,6 +166,7 @@ class InputManager {
     this._escapePressed = false;
     this._iPressed = false;
     this._enterPressed = false;
+    this._adminTogglePressed = false;
   }
 
   // ── Event handlers (arrow functions for stable `this`) ─────
@@ -172,7 +182,8 @@ class InputManager {
     if (e.code === 'Space') this._jumpPressed = true;
     if (e.code === 'Escape') { this._escapePressed = true; e.preventDefault(); }
     if (e.code === 'KeyI') this._iPressed = true;
-    if (e.code === 'Enter') this._enterPressed = true;
+if (e.code === 'Enter') this._enterPressed = true;
+    if (e.code === 'Backslash') this._adminTogglePressed = true;
   };
 
   private onKeyUp = (e: KeyboardEvent): void => {

@@ -10,7 +10,8 @@ import {
   blockIndex, MessageType,
 } from '@grudge/shared';
 import type { ChunkData } from '@grudge/shared';
-import { buildChunkMesh, createPlaceholderAtlas, createVoxelMaterial } from './engine/VoxelRenderer.js';
+import { buildChunkMesh, createPlaceholderAtlas, createVoxelMaterial, createWaterMaterial, updateWaterMaterial } from './engine/VoxelRenderer.js';
+import { Sky } from './engine/Sky.js';
 import { ChunkMeshPool } from './engine/ChunkMeshPool.js';
 import { assetLoader } from './assets/AssetLoader.js';
 import type { LoadedCharacter } from './assets/AssetLoader.js';
@@ -41,8 +42,11 @@ import { ChatUI } from './ui/ChatUI.js';
 // ═══════════════════════════════════════════════════════════════════
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x87CEEB);
-scene.fog = new THREE.Fog(0x87CEEB, CHUNK_SIZE * 6, CHUNK_SIZE * RENDER_DISTANCE);
+// Sky dome + fog (synced to horizon color)
+const sky = new Sky();
+scene.add(sky.mesh);
+scene.background = null;   // sky dome replaces flat background
+scene.fog = new THREE.Fog(sky.horizonColor, CHUNK_SIZE * 6, CHUNK_SIZE * RENDER_DISTANCE);
 
 const camera = new THREE.PerspectiveCamera(65, window.innerWidth / window.innerHeight, 0.1, CHUNK_SIZE * RENDER_DISTANCE * 1.5);
 
@@ -78,9 +82,10 @@ scene.add(sunLight.target);
 const hemiLight = new THREE.HemisphereLight(0x87CEEB, 0x362907, 0.4);
 scene.add(hemiLight);
 
-// Texture atlas and material
+// Texture atlas, voxel material, and water material
 const atlas = createPlaceholderAtlas();
 const voxelMaterial = createVoxelMaterial(atlas);
+const waterMaterial = createWaterMaterial(atlas);
 
 // ═══════════════════════════════════════════════════════════════════
 // PLAYER MODEL — Loaded from asset library (fallback box-biped)
@@ -633,6 +638,12 @@ function gameLoop(time: number) {
     chatUI.toggleFocus();
   }
 
+  // Admin fly toggle (\ key)
+  if (inputManager.adminTogglePressed && uiManager.inGame) {
+    controller.adminFly = !controller.adminFly;
+    console.log(`[Admin] Fly mode: ${controller.adminFly ? 'ON' : 'OFF'}`);
+  }
+
   // ── Read input once per render frame ──
   const move = inputManager.getMovement();
   const combat = inputManager.getCombat();
@@ -697,6 +708,10 @@ function gameLoop(time: number) {
   sunLight.position.set(renderPos.x + 100, renderPos.y + 200, renderPos.z + 50);
   sunLight.target.position.set(renderPos.x, renderPos.y, renderPos.z);
 
+  // Animate sky dome + water UV scroll
+  sky.update(camera.position, frameTime);
+  updateWaterMaterial(waterMaterial, time * 0.001);
+
   // Clear per-frame input triggers
   inputManager.endFrame();
 
@@ -734,6 +749,8 @@ function gameLoop(time: number) {
   const entityEl = document.getElementById('entities');
   if (entityEl) entityEl.textContent = entityManager.getDebugInfo();
   if (authEl) authEl.textContent = `Auth: ${grudgeAuth.displayName} (${grudgeAuth.method})`;
+  const flyEl = document.getElementById('fly-mode');
+  if (flyEl) flyEl.textContent = controller.adminFly ? '✈ FLY MODE' : '';
 }
 
 // ═══════════════════════════════════════════════════════════════════

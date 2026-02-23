@@ -62,6 +62,12 @@ export class CharacterController {
   /** Is the controller locked out of movement? (e.g., during attack animation) */
   movementLocked = false;
 
+  /** Admin fly mode — no gravity, no collision, ascend/descend with Space/Ctrl */
+  adminFly = false;
+  private readonly FLY_SPEED = 20;
+  private readonly FLY_SPRINT_MULT = 3;
+  private readonly FLY_VERTICAL_SPEED = 15;
+
   // ── Coyote time + jump buffer ──────────────────────────────
   private wasGrounded = false;
   private coyoteTimer = 0;
@@ -123,6 +129,11 @@ export class CharacterController {
     // Wait for terrain before applying physics
     if (!this.checkSpawnReady()) {
       return this.getState();
+    }
+
+    // ── Admin fly mode ── no gravity, no collision, free 3D movement
+    if (this.adminFly) {
+      return this.updateFly(dt, move);
     }
 
     // ── Coyote / jump buffer timers ──
@@ -224,7 +235,44 @@ export class CharacterController {
     return this.getState();
   }
 
-  // ── Collision ─────────────────────────────────────────────────
+  // ── Admin Fly ─────────────────────────────────────────
+
+  private updateFly(dt: number, move: MovementInput): ControllerState {
+    // Turning
+    if (move.turnLeft)  this.yaw += PLAYER_TURN_SPEED * dt;
+    if (move.turnRight) this.yaw -= PLAYER_TURN_SPEED * dt;
+
+    const speed = move.sprint ? this.FLY_SPEED * this.FLY_SPRINT_MULT : this.FLY_SPEED;
+
+    this._forward.set(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
+    this._right.set(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
+
+    this._moveDir.set(0, 0, 0);
+    if (move.forward)      this._moveDir.add(this._forward);
+    if (move.back)         this._moveDir.sub(this._forward);
+    if (move.strafeLeft)   this._moveDir.sub(this._right);
+    if (move.strafeRight)  this._moveDir.add(this._right);
+    if (this._moveDir.lengthSq() > 0) this._moveDir.normalize();
+
+    // Horizontal
+    this.position.x += this._moveDir.x * speed * dt;
+    this.position.z += this._moveDir.z * speed * dt;
+
+    // Vertical — Space = up, Ctrl = down
+    if (move.ascend)  this.position.y += this.FLY_VERTICAL_SPEED * (move.sprint ? this.FLY_SPRINT_MULT : 1) * dt;
+    if (move.descend) this.position.y -= this.FLY_VERTICAL_SPEED * (move.sprint ? this.FLY_SPRINT_MULT : 1) * dt;
+
+    this.velocity.set(0, 0, 0);
+    this.onGround = false;
+    this.moveSpeed = this._moveDir.lengthSq() > 0 ? speed : 0;
+    this.isMoving = this.moveSpeed > 0.3;
+    this.isSprinting = move.sprint;
+    this.movingBack = move.back && !move.forward;
+
+    return this.getState();
+  }
+
+  // ── Collision ─────────────────────────────────────────
 
   private applyCollision(dt: number): void {
     const newX = this.position.x + this.velocity.x * dt;
