@@ -19,6 +19,7 @@ import {
   PLAYER_SPEED, SPRINT_MULTIPLIER, JUMP_VELOCITY, GRAVITY,
   PLAYER_EYE_HEIGHT, PLAYER_ACCELERATION, PLAYER_GROUND_DRAG,
   PLAYER_AIR_DRAG, PLAYER_TURN_SPEED, COYOTE_TIME, JUMP_BUFFER_TIME,
+  PLAYER_WIDTH, PLAYER_HEIGHT, AABB,
 } from '@grudge/shared';
 import type { MovementInput } from '../input/InputManager.js';
 
@@ -37,6 +38,8 @@ export interface ControllerState {
   readonly isSprinting: boolean;
   readonly moveSpeed: number;
   readonly movingBack: boolean;
+  /** Normal of last wall hit (useful for effects/animation). Zero if no collision. */
+  readonly hitNormal: THREE.Vector3;
 }
 
 // ── Controller ────────────────────────────────────────────────────
@@ -76,6 +79,9 @@ export class CharacterController {
 
   // Collision callback
   private isSolid: BlockQuery;
+
+  /** Last hit normal from collision (for wall-sliding feedback) */
+  readonly hitNormal = new THREE.Vector3();
 
   // Reusable vectors (avoid GC)
   private _forward = new THREE.Vector3();
@@ -229,8 +235,8 @@ export class CharacterController {
       this.velocity.y = 0;
     }
 
-    // ── Apply velocity with AABB collision ──
-    this.applyCollision(dt);
+    // ── Apply velocity with swept AABB collision (5 substeps for stability) ──
+    this.applySweptCollision(dt);
 
     return this.getState();
   }
@@ -272,50 +278,55 @@ export class CharacterController {
     return this.getState();
   }
 
-  // ── Collision ─────────────────────────────────────────
+  // ── Swept AABB Collision (replaces old point-check method) ───
+  //
+  // Uses AABB.sweepVoxels() with 5 substeps per tick for stability,
+  // matching the pattern from Three.js games_fps example.
 
-  private applyCollision(dt: number): void {
-    const newX = this.position.x + this.velocity.x * dt;
-    const newY = this.position.y + this.velocity.y * dt;
-    const newZ = this.position.z + this.velocity.z * dt;
+  private static readonly COLLISION_SUBSTEPS = 5;
 
-    const hw = 0.3; // half-width for AABB
+  private applySweptCollision(dt: number): void {
+    const substepDt = dt / CharacterController.COLLISION_SUBSTEPS;
+    this.hitNormal.set(0, 0, 0);
 
-    // X axis
-    if (!this.isSolid(newX + hw, this.position.y, this.position.z) &&
-        !this.isSolid(newX - hw, this.position.y, this.position.z) &&
-        !this.isSolid(newX + hw, this.position.y + 1, this.position.z) &&
-        !this.isSolid(newX - hw, this.position.y + 1, this.position.z)) {
-      this.position.x = newX;
-    } else {
-      this.velocity.x = 0;
-    }
+    for (let i = 0; i < CharacterController.COLLISION_SUBSTEPS; i++) {
+      // Build AABB from current position (feet at position.y)
+      const box = AABB.fromFeet(
+        this.position.x, this.position.y, this.position.z,
+        PLAYER_WIDTH, PLAYER_HEIGHT,
+      );
 
-    // Z axis
-    if (!this.isSolid(this.position.x, this.position.y, newZ + hw) &&
-        !this.isSolid(this.position.x, this.position.y, newZ - hw) &&
-        !this.isSolid(this.position.x, this.position.y + 1, newZ + hw) &&
-        !this.isSolid(this.position.x, this.position.y + 1, newZ - hw)) {
-      this.position.z = newZ;
-    } else {
-      this.velocity.z = 0;
-    }
+      const result = box.sweepVoxels(
+        this.velocity.x, this.velocity.y, this.velocity.z,
+        substepDt,
+        this.isSolid,
+        1.01, // step-up height
+      );
 
-    // Y axis (ground + ceiling)
-    this.onGround = false;
-    if (this.velocity.y < 0) {
-      if (this.isSolid(this.position.x, newY - 0.01, this.position.z)) {
-        this.position.y = Math.ceil(newY);
-        this.velocity.y = 0;
-        this.onGround = true;
-      } else {
-        this.position.y = newY;
+      // Apply resolved position
+      this.position.set(result.x, result.y, result.z);
+
+      // Update velocity from collision response
+      this.velocity.x = result.vx;
+      this.velocity.y = result.vy;
+      this.velocity.z = result.vz;
+
+      // Track ground state
+      if (result.onGround) this.onGround = true;
+
+      // Track hit normal (last non-zero wins)
+      if (result.hitNormalX !== 0 || result.hitNormalY !== 0 || result.hitNormalZ !== 0) {
+        this.hitNormal.set(result.hitNormalX, result.hitNormalY, result.hitNormalZ);
       }
-    } else {
-      if (this.isSolid(this.position.x, newY + PLAYER_EYE_HEIGHT + 0.3, this.position.z)) {
+    }
+
+    // Head-hit detection: raycast upward from center to cancel jump
+    // (from ThirdPersonPack HeadHittingDetect pattern)
+    if (this.isJumping && this.velocity.y > 0) {
+      const headY = this.position.y + PLAYER_HEIGHT + 0.1;
+      if (this.isSolid(this.position.x, headY, this.position.z)) {
         this.velocity.y = 0;
-      } else {
-        this.position.y = newY;
+        this.isJumping = false;
       }
     }
   }
@@ -332,6 +343,7 @@ export class CharacterController {
       isSprinting: this.isSprinting,
       moveSpeed: this.moveSpeed,
       movingBack: this.movingBack,
+      hitNormal: this.hitNormal,
     };
   }
 }

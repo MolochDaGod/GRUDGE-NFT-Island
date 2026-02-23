@@ -59,14 +59,14 @@ renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.2;
+renderer.toneMappingExposure = 1.0;
 document.body.prepend(renderer.domElement);
 
-// Lighting
-const ambientLight = new THREE.AmbientLight(0x606080, 0.6);
+// Lighting — values matched to Three.js minecraft example
+const ambientLight = new THREE.AmbientLight(0xffffff, 3);
 scene.add(ambientLight);
 
-const sunLight = new THREE.DirectionalLight(0xffeedd, 1.2);
+const sunLight = new THREE.DirectionalLight(0xffffff, 12);
 sunLight.position.set(100, 200, 50);
 sunLight.castShadow = true;
 sunLight.shadow.mapSize.set(2048, 2048);
@@ -79,7 +79,7 @@ sunLight.shadow.camera.bottom = -150;
 scene.add(sunLight);
 scene.add(sunLight.target);
 
-const hemiLight = new THREE.HemisphereLight(0x87CEEB, 0x362907, 0.4);
+const hemiLight = new THREE.HemisphereLight(0x87CEEB, 0x362907, 1);
 scene.add(hemiLight);
 
 // Texture atlas, voxel material, and water material
