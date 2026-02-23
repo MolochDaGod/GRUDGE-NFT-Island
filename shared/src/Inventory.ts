@@ -32,7 +32,7 @@ export const RARITY_COLORS: Record<Rarity, string> = {
 export type ItemType =
   | 'weapon' | 'armor' | 'shield'
   | 'consumable' | 'resource'
-  | 'relic' | 'cape';
+  | 'relic' | 'cape' | 'curio';
 
 // ── Weapon Type (maps to AnimStateMachine weapon packs) ───────────
 
@@ -52,6 +52,16 @@ export type EquipSlot =
   | 'mainHand' | 'offHand'
   | 'head' | 'chest' | 'legs' | 'boots'
   | 'cape' | 'relic1' | 'relic2';
+
+// ── Curio Slot (soulbound, non-droppable) ─────────────────────────
+
+export type CurioSlot = 'harvestTool' | 'spellBook' | 'racialTrinket';
+
+export const CURIO_SLOT_NAMES: Record<CurioSlot, string> = {
+  harvestTool:    'Harvest Tool',
+  spellBook:      'Spell Book',
+  racialTrinket:  'Racial Trinket',
+};
 
 export const EQUIP_SLOT_NAMES: Record<EquipSlot, string> = {
   mainHand: 'Main Hand',
@@ -111,6 +121,10 @@ export interface ItemDef {
   capeCooldown?: number;
   /** Relic active ability (if any) */
   relicAbility?: string;
+  /** Is this a soulbound curio? (cannot be dropped, traded, or unequipped) */
+  isCurio?: boolean;
+  /** Which curio slot this occupies */
+  curioSlot?: CurioSlot;
 }
 
 // ── Inventory Slot ────────────────────────────────────────────────
@@ -252,6 +266,100 @@ export const ITEMS: Record<string, ItemDef> = {
     stats: {}, maxStack: 64, levelReq: 0,
     description: 'A bundle of gathered herbs.', iconIndex: 63,
   },
+
+  // ═══════════════════════════════════════════════════════════════
+  // CURIOS — Soulbound, non-droppable class/race items
+  // ═══════════════════════════════════════════════════════════════
+
+  // === HARVEST TOOLS (one per class) ===
+  'warrior_pickaxe': {
+    id: 'warrior_pickaxe', name: 'War Pickaxe', type: 'curio', rarity: Rarity.UNCOMMON,
+    stats: { attackSpeed: 1.0 }, maxStack: 1, levelReq: 1,
+    description: 'A heavy military-grade pickaxe. Mines ores with brute force.',
+    iconIndex: 100, isCurio: true, curioSlot: 'harvestTool',
+  },
+  'ranger_skinning_knife': {
+    id: 'ranger_skinning_knife', name: 'Skinning Knife', type: 'curio', rarity: Rarity.UNCOMMON,
+    stats: { attackSpeed: 1.2 }, maxStack: 1, levelReq: 1,
+    description: 'A razor-sharp blade for harvesting herbs and skinning pelts.',
+    iconIndex: 101, isCurio: true, curioSlot: 'harvestTool',
+  },
+  'mage_crystal_lens': {
+    id: 'mage_crystal_lens', name: 'Crystal Lens', type: 'curio', rarity: Rarity.UNCOMMON,
+    stats: { attackSpeed: 0.8, mana: 10 }, maxStack: 1, levelReq: 1,
+    description: 'A focusing lens that fractures stone with arcane resonance.',
+    iconIndex: 102, isCurio: true, curioSlot: 'harvestTool',
+  },
+  'worge_claws': {
+    id: 'worge_claws', name: 'Primal Claws', type: 'curio', rarity: Rarity.UNCOMMON,
+    stats: { attackSpeed: 1.4 }, maxStack: 1, levelReq: 1,
+    description: 'Retractable beast claws. Tear through earth and bark alike.',
+    iconIndex: 103, isCurio: true, curioSlot: 'harvestTool',
+  },
+
+  // === SPELL BOOKS (one per class) ===
+  'warrior_battle_manual': {
+    id: 'warrior_battle_manual', name: 'Battle Manual', type: 'curio', rarity: Rarity.UNCOMMON,
+    stats: { damage: 2, stamina: 5 }, maxStack: 1, levelReq: 1,
+    description: 'Tactical combat doctrines of the war colleges. Teaches weapon skills.',
+    iconIndex: 110, isCurio: true, curioSlot: 'spellBook',
+  },
+  'ranger_fieldcraft_tome': {
+    id: 'ranger_fieldcraft_tome', name: 'Fieldcraft Tome', type: 'curio', rarity: Rarity.UNCOMMON,
+    stats: { criticalChance: 2, movementSpeed: 1 }, maxStack: 1, levelReq: 1,
+    description: 'Survival and tracking techniques of the ranger guilds.',
+    iconIndex: 111, isCurio: true, curioSlot: 'spellBook',
+  },
+  'mage_arcane_grimoire': {
+    id: 'mage_arcane_grimoire', name: 'Arcane Grimoire', type: 'curio', rarity: Rarity.UNCOMMON,
+    stats: { mana: 15, cooldownReduction: 2 }, maxStack: 1, levelReq: 1,
+    description: 'A tome of arcane incantations and spell formulae.',
+    iconIndex: 112, isCurio: true, curioSlot: 'spellBook',
+  },
+  'worge_primal_codex': {
+    id: 'worge_primal_codex', name: 'Primal Codex', type: 'curio', rarity: Rarity.UNCOMMON,
+    stats: { health: 10, stamina: 5 }, maxStack: 1, levelReq: 1,
+    description: 'Ancient rites of the shapeshifters. Channels primal fury.',
+    iconIndex: 113, isCurio: true, curioSlot: 'spellBook',
+  },
+
+  // === RACIAL TRINKETS (one per race) ===
+  'human_signet': {
+    id: 'human_signet', name: 'Human Signet Ring', type: 'curio', rarity: Rarity.RARE,
+    stats: { damage: 1, defense: 1, health: 5 }, maxStack: 1, levelReq: 1,
+    description: 'A balanced signet of the human kingdoms. Jack of all trades.',
+    iconIndex: 120, isCurio: true, curioSlot: 'racialTrinket',
+  },
+  'orc_warbone': {
+    id: 'orc_warbone', name: 'Orc Warbone Tusk', type: 'curio', rarity: Rarity.RARE,
+    stats: { damage: 3, health: 8 }, maxStack: 1, levelReq: 1,
+    description: 'A trophy tusk that pulses with orcish battle rage.',
+    iconIndex: 121, isCurio: true, curioSlot: 'racialTrinket',
+  },
+  'elf_moonstone': {
+    id: 'elf_moonstone', name: 'Elven Moonstone', type: 'curio', rarity: Rarity.RARE,
+    stats: { mana: 10, cooldownReduction: 1, movementSpeed: 1 }, maxStack: 1, levelReq: 1,
+    description: 'A luminous gem attuned to the elven leylines.',
+    iconIndex: 122, isCurio: true, curioSlot: 'racialTrinket',
+  },
+  'dwarf_anvilcharm': {
+    id: 'dwarf_anvilcharm', name: 'Dwarf Anvilcharm', type: 'curio', rarity: Rarity.RARE,
+    stats: { defense: 3, stamina: 8 }, maxStack: 1, levelReq: 1,
+    description: 'A miniature anvil charm blessed by the forge-fathers.',
+    iconIndex: 123, isCurio: true, curioSlot: 'racialTrinket',
+  },
+  'barbarian_totem': {
+    id: 'barbarian_totem', name: 'Barbarian War Totem', type: 'curio', rarity: Rarity.RARE,
+    stats: { damage: 2, health: 10 }, maxStack: 1, levelReq: 1,
+    description: 'A bone totem carved by tribal shamans. Radiates ferocity.',
+    iconIndex: 124, isCurio: true, curioSlot: 'racialTrinket',
+  },
+  'undead_phylactery': {
+    id: 'undead_phylactery', name: 'Undead Phylactery', type: 'curio', rarity: Rarity.RARE,
+    stats: { mana: 8, resistance: 3 }, maxStack: 1, levelReq: 1,
+    description: 'A dark vessel binding soul to flesh. Resists holy and arcane.',
+    iconIndex: 125, isCurio: true, curioSlot: 'racialTrinket',
+  },
 };
 
 /** Look up an item definition by ID */
@@ -259,19 +367,98 @@ export function getItemDef(id: string): ItemDef | undefined {
   return ITEMS[id];
 }
 
+// ── Starter Curio Mapping ─────────────────────────────────────────
+
+const CLASS_HARVEST_TOOL: Record<string, string> = {
+  WARRIOR: 'warrior_pickaxe',
+  RANGER:  'ranger_skinning_knife',
+  MAGE:    'mage_crystal_lens',
+  WORGE:   'worge_claws',
+};
+
+const CLASS_SPELL_BOOK: Record<string, string> = {
+  WARRIOR: 'warrior_battle_manual',
+  RANGER:  'ranger_fieldcraft_tome',
+  MAGE:    'mage_arcane_grimoire',
+  WORGE:   'worge_primal_codex',
+};
+
+const RACE_TRINKET: Record<string, string> = {
+  HUMAN:     'human_signet',
+  ORC:       'orc_warbone',
+  ELF:       'elf_moonstone',
+  DWARF:     'dwarf_anvilcharm',
+  BARBARIAN: 'barbarian_totem',
+  UNDEAD:    'undead_phylactery',
+};
+
+/** Get the starter curio item IDs for a class + race combination */
+export function getStarterCurios(
+  playerClass: string,
+  race: string,
+): { harvestTool: string; spellBook: string; racialTrinket: string } {
+  return {
+    harvestTool:   CLASS_HARVEST_TOOL[playerClass.toUpperCase()] ?? CLASS_HARVEST_TOOL.WARRIOR,
+    spellBook:     CLASS_SPELL_BOOK[playerClass.toUpperCase()] ?? CLASS_SPELL_BOOK.WARRIOR,
+    racialTrinket: RACE_TRINKET[race.toUpperCase()] ?? RACE_TRINKET.HUMAN,
+  };
+}
+
+// ── Hotbar Constants ────────────────────────────────────────────
+
+/** Hotbar = first N bag slots (Minecraft pattern: bag[0..7] = hotbar) */
+export const HOTBAR_SIZE = 8;
+
 // ── Inventory Class ───────────────────────────────────────────────
 
 export class Inventory {
-  /** Bag slots (fixed size) */
+  /** Bag slots (fixed size). Slots 0..HOTBAR_SIZE-1 = hotbar row. */
   readonly slots: (InvSlot | null)[];
   readonly size: number;
 
   /** Equipment slots */
   readonly equipment: Partial<Record<EquipSlot, InvSlot>> = {};
 
+  /** Curio slots (soulbound, non-droppable) */
+  readonly curios: Partial<Record<CurioSlot, InvSlot>> = {};
+
+  /** Currently selected hotbar slot (0-based, 0..HOTBAR_SIZE-1) */
+  selectedHotbar = 0;
+
   constructor(size = 40) {
     this.size = size;
     this.slots = new Array(size).fill(null);
+  }
+
+  // ── Hotbar Operations ────────────────────────────────────────
+
+  /** Get the item in a hotbar slot (0-based index) */
+  getHotbarItem(index: number): ItemDef | undefined {
+    if (index < 0 || index >= HOTBAR_SIZE) return undefined;
+    const slot = this.slots[index];
+    return slot ? ITEMS[slot.itemId] : undefined;
+  }
+
+  /** Get the item in the currently selected hotbar slot */
+  getSelectedItem(): ItemDef | undefined {
+    return this.getHotbarItem(this.selectedHotbar);
+  }
+
+  /**
+   * Use a consumable from a hotbar slot. Removes 1 from the stack.
+   * Returns the item definition if successful, undefined if not consumable.
+   */
+  useConsumable(index: number): ItemDef | undefined {
+    if (index < 0 || index >= HOTBAR_SIZE) return undefined;
+    const slot = this.slots[index];
+    if (!slot) return undefined;
+
+    const def = ITEMS[slot.itemId];
+    if (!def || def.type !== 'consumable') return undefined;
+
+    slot.count -= 1;
+    if (slot.count <= 0) this.slots[index] = null;
+    return def;
   }
 
   // ── Bag Operations ──────────────────────────────────────────
@@ -427,16 +614,40 @@ export class Inventory {
     return inv ? ITEMS[inv.itemId] : undefined;
   }
 
+  // ── Curio Operations (soulbound — no bag interaction) ────────
+
+  /** Set a curio in a slot. Permanent — no unequip to bag. */
+  setCurio(slot: CurioSlot, itemId: string): void {
+    const def = ITEMS[itemId];
+    if (!def?.isCurio) return;
+    this.curios[slot] = { itemId, count: 1 };
+  }
+
+  /** Get the curio item def for a slot */
+  getCurio(slot: CurioSlot): ItemDef | undefined {
+    const inv = this.curios[slot];
+    return inv ? ITEMS[inv.itemId] : undefined;
+  }
+
   // ── Serialization ───────────────────────────────────────────
 
-  toJSON(): { slots: (InvSlot | null)[]; equipment: Partial<Record<EquipSlot, InvSlot>> } {
+  toJSON(): {
+    slots: (InvSlot | null)[];
+    equipment: Partial<Record<EquipSlot, InvSlot>>;
+    curios: Partial<Record<CurioSlot, InvSlot>>;
+  } {
     return {
       slots: this.slots.map(s => s ? { ...s } : null),
       equipment: { ...this.equipment },
+      curios: { ...this.curios },
     };
   }
 
-  fromJSON(data: { slots: (InvSlot | null)[]; equipment: Partial<Record<EquipSlot, InvSlot>> }): void {
+  fromJSON(data: {
+    slots: (InvSlot | null)[];
+    equipment: Partial<Record<EquipSlot, InvSlot>>;
+    curios?: Partial<Record<CurioSlot, InvSlot>>;
+  }): void {
     for (let i = 0; i < this.size; i++) {
       this.slots[i] = data.slots[i] ? { ...data.slots[i]! } : null;
     }
@@ -446,6 +657,15 @@ export class Inventory {
     }
     for (const [key, val] of Object.entries(data.equipment)) {
       if (val) this.equipment[key as EquipSlot] = { ...val };
+    }
+    // Clear and repopulate curios
+    for (const key of Object.keys(this.curios) as CurioSlot[]) {
+      delete this.curios[key];
+    }
+    if (data.curios) {
+      for (const [key, val] of Object.entries(data.curios)) {
+        if (val) this.curios[key as CurioSlot] = { ...val };
+      }
     }
   }
 }

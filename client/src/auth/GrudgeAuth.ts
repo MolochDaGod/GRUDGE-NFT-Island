@@ -54,6 +54,8 @@ export interface GrudgeProfile {
   puterUsername: string;
   /** Player class (set during character creation) */
   playerClass: string;
+  /** Player race (set during character creation) */
+  race: string;
   /** Faction affiliation */
   faction: string;
   /** Character level */
@@ -71,6 +73,7 @@ function createDefaultProfile(grudgeId: string, displayName: string, puterUserna
     displayName,
     puterUsername,
     playerClass: '',
+    race: '',
     faction: '',
     level: 1,
     createdAt: now,

@@ -45,8 +45,15 @@ class InputManager {
 // ── UI triggers (reset each frame) ──────────────────────────
   private _escapePressed = false;
   private _iPressed = false;
+  private _kPressed = false;
   private _enterPressed = false;
   private _adminTogglePressed = false;
+
+  // ── Hotbar selection (reset each frame) ─────────────────────
+  /** -1 = no selection this frame, 0-7 = hotbar slot selected */
+  private _hotbarSelect = -1;
+  /** Accumulated hotbar scroll delta (positive = next, negative = prev) */
+  private _hotbarScroll = 0;
 
   /** When true, movement and combat input return zeros (UI is blocking) */
   uiBlocked = false;
@@ -129,9 +136,15 @@ getMovement(): MovementInput {
   /** UI triggers (read once per frame) */
   get escapePressed(): boolean { return this._escapePressed; }
   get iPressed(): boolean { return this._iPressed; }
+  get kPressed(): boolean { return this._kPressed; }
 get enterPressed(): boolean { return this._enterPressed; }
   /** Toggle admin fly mode (Backslash) */
   get adminTogglePressed(): boolean { return this._adminTogglePressed; }
+
+  /** Hotbar slot selected this frame (-1 = none) */
+  get hotbarSelect(): number { return this.uiBlocked ? -1 : this._hotbarSelect; }
+  /** Hotbar scroll delta this frame (for scroll wheel cycling) */
+  get hotbarScroll(): number { return this.uiBlocked ? 0 : this._hotbarScroll; }
 
   /** Is a specific key currently held? */
   held(code: string): boolean {
@@ -165,8 +178,11 @@ endFrame(): void {
     this._jumpPressed = false;
     this._escapePressed = false;
     this._iPressed = false;
+    this._kPressed = false;
     this._enterPressed = false;
     this._adminTogglePressed = false;
+    this._hotbarSelect = -1;
+    this._hotbarScroll = 0;
   }
 
   // ── Event handlers (arrow functions for stable `this`) ─────
@@ -182,8 +198,14 @@ endFrame(): void {
     if (e.code === 'Space') this._jumpPressed = true;
     if (e.code === 'Escape') { this._escapePressed = true; e.preventDefault(); }
     if (e.code === 'KeyI') this._iPressed = true;
+    if (e.code === 'KeyK') this._kPressed = true;
 if (e.code === 'Enter') this._enterPressed = true;
     if (e.code === 'Backslash') this._adminTogglePressed = true;
+
+    // Hotbar number keys: Digit1-Digit8 → slot 0-7
+    if (e.code >= 'Digit1' && e.code <= 'Digit8') {
+      this._hotbarSelect = parseInt(e.code.charAt(5)) - 1;
+    }
   };
 
   private onKeyUp = (e: KeyboardEvent): void => {
@@ -229,6 +251,10 @@ private onMouseDown = (e: MouseEvent): void => {
 
   private onWheel = (e: WheelEvent): void => {
     this.wheelDelta += e.deltaY;
+    // Hotbar scroll cycling (only when not in UI)
+    if (!this.uiBlocked) {
+      this._hotbarScroll += Math.sign(e.deltaY);
+    }
   };
 }
 

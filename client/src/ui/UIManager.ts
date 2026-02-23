@@ -34,6 +34,7 @@ export const SCREEN = {
   ESCAPE_MENU:      'escape-menu',
   SETTINGS:         'settings',
   INVENTORY:        'inventory',
+  CURIOS:           'curios',
   CHAT:             'chat',
 } as const;
 
@@ -155,6 +156,12 @@ export class UIManager {
       // Don't toggle inventory if another modal is open (except inventory itself)
       if (this.isMenuOpen && !this.isOpen(SCREEN.INVENTORY)) return false;
       this.toggle(SCREEN.INVENTORY);
+      return true;
+    }
+
+    if (code === 'KeyK' && this.inGame) {
+      if (this.isMenuOpen && !this.isOpen(SCREEN.CURIOS)) return false;
+      this.toggle(SCREEN.CURIOS);
       return true;
     }
 

@@ -27,7 +27,8 @@ import { BlockInteraction } from './world/BlockInteraction.js';
 import { grudgeAuth } from './auth/GrudgeAuth.js';
 import { inputManager } from './input/InputManager.js';
 import { ThirdPersonCamera } from './camera/ThirdPersonCamera.js';
-import { Inventory } from '@grudge/shared';
+import { Inventory, ITEMS, getStarterCurios, HOTBAR_SIZE } from '@grudge/shared';
+import type { EquipSlot, CurioSlot } from '@grudge/shared';
 import { UIManager, SCREEN } from './ui/UIManager.js';
 import { MainMenu } from './ui/MainMenu.js';
 import { CharacterCreate } from './ui/CharacterCreate.js';
@@ -35,6 +36,7 @@ import { EscapeMenu } from './ui/EscapeMenu.js';
 import { SettingsPanel, loadSettings } from './ui/SettingsPanel.js';
 import type { GameSettings } from './ui/SettingsPanel.js';
 import { InventoryUI } from './ui/InventoryUI.js';
+import { CuriosUI } from './ui/CuriosUI.js';
 import { ChatUI } from './ui/ChatUI.js';
 
 // ═══════════════════════════════════════════════════════════════════
@@ -144,14 +146,66 @@ const targetSystem = new TargetSystem(entityManager);
 const gameHUD = new GameHUD();
 const blockInteraction = new BlockInteraction(scene, getBlockAtWorld);
 const playerInventory = new Inventory();
+gameHUD.setInventory(playerInventory);
 
-// Give the player some starter items
-playerInventory.addItem('iron_sword');
-playerInventory.addItem('wooden_shield');
-playerInventory.addItem('leather_cap');
-playerInventory.addItem('leather_pants');
-playerInventory.addItem('health_potion', 5);
-playerInventory.addItem('mana_potion', 3);
+/**
+ * Give class-appropriate starter gear and auto-equip it.
+ * Called after character creation or on returning players.
+ */
+function giveStarterKit(playerClass: string, race: string = 'HUMAN'): void {
+  // Clear any existing inventory (in case of re-creation)
+  for (let i = 0; i < playerInventory.size; i++) playerInventory.slots[i] = null;
+  for (const key of Object.keys(playerInventory.equipment) as EquipSlot[]) delete playerInventory.equipment[key];
+  for (const key of Object.keys(playerInventory.curios) as CurioSlot[]) delete playerInventory.curios[key];
+
+  // Class-specific weapon + off-hand
+  const classGear: Record<string, { weapon: string; offHand?: string; chest: string }> = {
+    WARRIOR: { weapon: 'iron_sword',  offHand: 'wooden_shield', chest: 'iron_chestplate' },
+    RANGER:  { weapon: 'hunting_bow',                           chest: 'leather_pants' },
+    MAGE:    { weapon: 'oak_staff',                             chest: 'cloth_robe' },
+    WORGE:   { weapon: 'iron_axe',                              chest: 'leather_pants' },
+  };
+  const gear = classGear[playerClass] || classGear.WARRIOR;
+
+  // Add gear to bag slots first, then equip from those slots
+  // This ensures the equip() swap logic works correctly
+  const toEquip: string[] = [
+    gear.weapon,
+    ...(gear.offHand ? [gear.offHand] : []),
+    'leather_cap',
+    gear.chest,
+    'leather_pants',
+  ];
+
+  for (const itemId of toEquip) {
+    playerInventory.addItem(itemId);
+  }
+
+  // Auto-equip each item from bag into its equipment slot
+  for (let i = 0; i < playerInventory.size; i++) {
+    const slot = playerInventory.slots[i];
+    if (!slot) continue;
+    const def = ITEMS[slot.itemId];
+    if (def?.equipSlot) {
+      playerInventory.equip(i);
+    }
+  }
+
+  // Add consumables (these stay in the bag)
+  playerInventory.addItem('health_potion', 5);
+  playerInventory.addItem('mana_potion', 3);
+
+  // Assign soulbound curios based on class + race
+  const curios = getStarterCurios(playerClass, race);
+  playerInventory.setCurio('harvestTool', curios.harvestTool);
+  playerInventory.setCurio('spellBook', curios.spellBook);
+  playerInventory.setCurio('racialTrinket', curios.racialTrinket);
+
+  console.log(`[Inventory] Starter kit for ${playerClass}/${race}: ${toEquip.join(', ')} + curios`);
+}
+
+// Give default starter kit (will be re-called after char create with correct class)
+giveStarterKit(grudgeAuth.profile.playerClass || 'WARRIOR', grudgeAuth.profile.race || 'HUMAN');
 
 // Attach input manager to the canvas
 inputManager.attach(renderer.domElement);
@@ -195,8 +249,13 @@ function buildUIScreens(): void {
     async (result) => {
       await grudgeAuth.updateProfile({
         playerClass: result.playerClass,
+        race: result.race,
         faction: result.faction,
       });
+      // Give class-appropriate starter gear + curios
+      giveStarterKit(result.playerClass, result.race);
+      // Reload character model for selected race
+      loadPlayerAssets(result.race.toLowerCase());
       mainMenu.updatePlayer(grudgeAuth.displayName, result.playerClass, grudgeAuth.profile.level);
       uiManager.close(SCREEN.CHARACTER_CREATE);
       uiManager.open(SCREEN.MAIN_MENU);
@@ -225,12 +284,14 @@ function buildUIScreens(): void {
   );
 
   const inventoryUI = new InventoryUI(playerInventory, () => uiManager.close(SCREEN.INVENTORY));
+  const curiosUI = new CuriosUI(playerInventory, () => uiManager.close(SCREEN.CURIOS));
 
   uiManager.register(mainMenu);
   uiManager.register(charCreate);
   uiManager.register(escapeMenu);
   uiManager.register(settingsPanel);
   uiManager.register(inventoryUI);
+  uiManager.register(curiosUI);
   uiManager.register(chatUI);
 }
 
@@ -634,8 +695,18 @@ function gameLoop(time: number) {
   inputManager.uiBlocked = uiManager.isMenuOpen || chatUI.focused;
   if (inputManager.escapePressed) uiManager.handleKey('Escape');
   if (inputManager.iPressed) uiManager.handleKey('KeyI');
+  if (inputManager.kPressed) uiManager.handleKey('KeyK');
   if (inputManager.enterPressed && uiManager.inGame && !uiManager.isMenuOpen) {
     chatUI.toggleFocus();
+  }
+
+  // ── Hotbar selection (number keys + scroll wheel) ──
+  const hbSelect = inputManager.hotbarSelect;
+  if (hbSelect >= 0) playerInventory.selectedHotbar = hbSelect;
+  const hbScroll = inputManager.hotbarScroll;
+  if (hbScroll !== 0) {
+    playerInventory.selectedHotbar =
+      ((playerInventory.selectedHotbar + hbScroll) % HOTBAR_SIZE + HOTBAR_SIZE) % HOTBAR_SIZE;
   }
 
   // Admin fly toggle (\ key)
@@ -874,15 +945,17 @@ function enterWorld() {
 }
 
 /** Load character models and animations in background */
-async function loadPlayerAssets() {
+async function loadPlayerAssets(race = 'human') {
   try {
     await assetLoader.init();
-    const char = await assetLoader.loadToonCharacter('human');
+    const validRaces = assetLoader.getRaces();
+    const safeRace = validRaces.includes(race as any) ? race : 'human';
+    const char = await assetLoader.loadToonCharacter(safeRace as any);
     attachCharacterModel(char);
 
     await assetLoader.loadGLBAnimPack('base');
     animStateMachine = new AnimationStateMachine(char);
-    console.log(`[Main] AnimStateMachine ready — GLB packs: ${assetLoader.getGLBAnimPacks().join(', ')}`);
+    console.log(`[Main] AnimStateMachine ready (${safeRace}) — GLB packs: ${assetLoader.getGLBAnimPacks().join(', ')}`);
   } catch (e) {
     console.warn('[Main] Character loading failed, keeping fallback biped:', e);
   }

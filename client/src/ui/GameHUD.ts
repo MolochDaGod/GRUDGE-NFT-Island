@@ -17,6 +17,8 @@
 
 import type { CombatState, CombatEvent } from '../combat/CombatSystem.js';
 import type { TargetSystem } from '../combat/TargetSystem.js';
+import type { Inventory } from '@grudge/shared';
+import { ITEMS, RARITY_COLORS, HOTBAR_SIZE } from '@grudge/shared';
 
 // ── Styles ────────────────────────────────────────────────────────
 
@@ -90,25 +92,67 @@ const HUD_CSS = `
   color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,0.8);
 }
 
-/* ── Action Bar ───────────────────────────────────────────────── */
-#action-bar {
+/* ── Hotbar ────────────────────────────────────────────────── */
+#hotbar {
   position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%);
-  display: flex; gap: 4px;
+  display: flex; align-items: flex-end; gap: 6px;
 }
 
-.action-slot {
+#hotbar-items {
+  display: flex; gap: 3px;
+  background: rgba(0,0,0,0.35); border-radius: 8px; padding: 3px;
+}
+
+.hb-slot {
   width: 44px; height: 44px; background: rgba(0,0,0,0.6);
-  border: 1px solid rgba(255,255,255,0.15); border-radius: 6px;
+  border: 2px solid rgba(255,255,255,0.1); border-radius: 6px;
   display: flex; align-items: center; justify-content: center;
-  position: relative; font-size: 18px; color: rgba(255,255,255,0.3);
+  position: relative; font-size: 18px; color: rgba(255,255,255,0.25);
+  transition: border-color 0.1s, box-shadow 0.1s;
 }
 
-.action-slot .keybind {
-  position: absolute; top: 2px; right: 4px; font-size: 9px;
-  color: rgba(255,255,255,0.5); font-weight: 600;
+.hb-slot .hb-key {
+  position: absolute; top: 1px; left: 4px; font-size: 9px;
+  color: rgba(255,255,255,0.4); font-weight: 700;
 }
 
-.action-slot.active { border-color: #d4a843; }
+.hb-slot .hb-count {
+  position: absolute; bottom: 1px; right: 3px; font-size: 9px;
+  color: #ccc; font-weight: 600;
+}
+
+.hb-slot.has-item {
+  border-color: var(--rarity-color, rgba(255,255,255,0.15));
+}
+
+.hb-slot.selected {
+  border-color: #d4a843;
+  box-shadow: 0 0 8px rgba(212,168,67,0.4), inset 0 0 6px rgba(212,168,67,0.15);
+}
+
+.hb-slot.selected.has-item {
+  border-color: #d4a843;
+}
+
+/* ── Combat Ability Indicators ──────────────────────────── */
+#hotbar-abilities {
+  display: flex; gap: 3px;
+  background: rgba(0,0,0,0.35); border-radius: 8px; padding: 3px;
+}
+
+.ability-slot {
+  width: 36px; height: 36px; background: rgba(0,0,0,0.6);
+  border: 1px solid rgba(255,255,255,0.12); border-radius: 5px;
+  display: flex; align-items: center; justify-content: center;
+  position: relative; font-size: 14px; color: rgba(255,255,255,0.35);
+}
+
+.ability-slot .ab-key {
+  position: absolute; top: 1px; right: 3px; font-size: 8px;
+  color: rgba(255,255,255,0.45); font-weight: 700;
+}
+
+.ability-slot.ab-active { border-color: rgba(212,168,67,0.6); }
 
 /* ── Combat Log ───────────────────────────────────────────────── */
 #combat-log {
@@ -135,26 +179,14 @@ const HUD_CSS = `
 }
 `;
 
-// ── Action Bar Slot Definitions ───────────────────────────────────
+// ── Item Type Icons ──────────────────────────────────────────
 
-interface ActionSlot {
-  key: string;
-  label: string;
-  icon: string;
-}
+const ITEM_ICONS: Record<string, string> = {
+  weapon: '⚔️', armor: '🛡️', shield: '🛡️', consumable: '🧪',
+  resource: '📦', relic: '💎', cape: '🧣', curio: '⭐',
+};
 
-const ACTION_SLOTS: ActionSlot[] = [
-  { key: '1', label: '1', icon: '⚔' },
-  { key: '2', label: '2', icon: '🛡' },
-  { key: '3', label: '3', icon: '✨' },
-  { key: '4', label: '4', icon: '🧪' },
-  { key: '5', label: '5', icon: '💊' },
-  { key: 'F', label: 'F', icon: '🗡' },
-  { key: 'R', label: 'R', icon: '🔮' },
-  { key: 'X', label: 'X', icon: '💨' },
-];
-
-// ── GameHUD Class ─────────────────────────────────────────────────
+// ── GameHUD Class ─────────────────────────────────────────────
 
 export class GameHUD {
   private root: HTMLDivElement;
@@ -173,8 +205,9 @@ export class GameHUD {
   private targetHpFill: HTMLDivElement;
   private targetHpText: HTMLDivElement;
 
-  // Action bar
-  private actionSlots: HTMLDivElement[] = [];
+  // Hotbar
+  private hotbarSlots: HTMLDivElement[] = [];
+  private inventory: Inventory | null = null;
 
   // Combat log
   private combatLog: HTMLDivElement;
@@ -247,19 +280,39 @@ export class GameHUD {
     this.targetFrame.appendChild(targetHpBar);
     this.root.appendChild(this.targetFrame);
 
-    // ── Action Bar ──
-    const actionBar = document.createElement('div');
-    actionBar.id = 'action-bar';
+    // ── Hotbar ──
+    const hotbar = document.createElement('div');
+    hotbar.id = 'hotbar';
 
-    for (const slot of ACTION_SLOTS) {
+    // Item hotbar (8 slots from inventory bag[0..7])
+    const itemBar = document.createElement('div');
+    itemBar.id = 'hotbar-items';
+    for (let i = 0; i < HOTBAR_SIZE; i++) {
       const el = document.createElement('div');
-      el.className = 'action-slot';
-      el.innerHTML = `${slot.icon}<span class="keybind">${slot.label}</span>`;
-      actionBar.appendChild(el);
-      this.actionSlots.push(el);
+      el.className = 'hb-slot';
+      el.innerHTML = `<span class="hb-key">${i + 1}</span>`;
+      itemBar.appendChild(el);
+      this.hotbarSlots.push(el);
     }
+    hotbar.appendChild(itemBar);
 
-    this.root.appendChild(actionBar);
+    // Combat ability indicators (F/R/X)
+    const abilityBar = document.createElement('div');
+    abilityBar.id = 'hotbar-abilities';
+    const abilities = [
+      { key: 'F', icon: '🗡' },
+      { key: 'R', icon: '🔮' },
+      { key: 'X', icon: '💨' },
+    ];
+    for (const ab of abilities) {
+      const el = document.createElement('div');
+      el.className = 'ability-slot';
+      el.innerHTML = `${ab.icon}<span class="ab-key">${ab.key}</span>`;
+      abilityBar.appendChild(el);
+    }
+    hotbar.appendChild(abilityBar);
+
+    this.root.appendChild(hotbar);
 
     // ── Combat Log ──
     this.combatLog = document.createElement('div');
@@ -278,9 +331,43 @@ export class GameHUD {
     });
   }
 
-  // ── Update (call every frame) ───────────────────────────────
+  /** Connect inventory for hotbar display. Call once after construction. */
+  setInventory(inv: Inventory): void {
+    this.inventory = inv;
+  }
+
+  // ── Update (call every frame) ─────────────────────────────
 
   update(combat: CombatState, target: TargetSystem): void {
+    // ── Hotbar ──
+    if (this.inventory) {
+      for (let i = 0; i < HOTBAR_SIZE; i++) {
+        const el = this.hotbarSlots[i];
+        if (!el) continue;
+
+        const bagSlot = this.inventory.slots[i];
+        const def = bagSlot ? ITEMS[bagSlot.itemId] : null;
+        const isSelected = this.inventory.selectedHotbar === i;
+
+        // Selection highlight
+        if (isSelected) el.classList.add('selected');
+        else el.classList.remove('selected');
+
+        if (def) {
+          const color = RARITY_COLORS[def.rarity];
+          const icon = ITEM_ICONS[def.type] || '?';
+          const count = bagSlot!.count > 1 ? `<span class="hb-count">${bagSlot!.count}</span>` : '';
+          el.classList.add('has-item');
+          el.style.setProperty('--rarity-color', color);
+          el.innerHTML = `<span class="hb-key">${i + 1}</span>${icon}${count}`;
+        } else {
+          el.classList.remove('has-item');
+          el.style.removeProperty('--rarity-color');
+          el.innerHTML = `<span class="hb-key">${i + 1}</span>`;
+        }
+      }
+    }
+
     // Player HP
     const hpPct = combat.maxHealth > 0
       ? (combat.health / combat.maxHealth) * 100 : 0;

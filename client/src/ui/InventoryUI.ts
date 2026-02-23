@@ -10,7 +10,7 @@
 
 import { SCREEN, type UIScreen } from './UIManager.js';
 import type { Inventory, EquipSlot, ItemDef } from '@grudge/shared';
-import { ITEMS, RARITY_COLORS, EQUIP_SLOT_NAMES } from '@grudge/shared';
+import { ITEMS, RARITY_COLORS, EQUIP_SLOT_NAMES, HOTBAR_SIZE } from '@grudge/shared';
 
 // ── CSS ───────────────────────────────────────────────────────────
 
@@ -72,6 +72,13 @@ const CSS = `
 }
 .inv-slot:hover { border-color: rgba(255,255,255,0.3); }
 .inv-slot.has-item { border-color: var(--rarity-color, rgba(255,255,255,0.15)); }
+
+/* Hotbar row accent */
+.inv-slot.hotbar-slot { background: rgba(212,168,67,0.06); }
+.inv-slot-hotbar-key {
+  position: absolute; top: 1px; left: 3px; font-size: 8px;
+  color: rgba(212,168,67,0.5); font-weight: 700; pointer-events: none;
+}
 
 .inv-slot-icon { font-size: 18px; pointer-events: none; }
 .inv-slot-count {
@@ -189,7 +196,7 @@ export class InventoryUI implements UIScreen {
       `;
     }
 
-    // Bag slots
+    // Bag slots (first HOTBAR_SIZE slots = hotbar row)
     let bagHtml = '';
     for (let i = 0; i < this.inventory.size; i++) {
       const slot = this.inventory.slots[i];
@@ -197,10 +204,13 @@ export class InventoryUI implements UIScreen {
       const icon = def ? (TYPE_ICONS[def.type] || '?') : '';
       const rarityColor = def ? RARITY_COLORS[def.rarity] : 'rgba(255,255,255,0.06)';
       const count = slot && slot.count > 1 ? slot.count : '';
+      const isHotbar = i < HOTBAR_SIZE;
+      const hotbarKey = isHotbar ? `<span class="inv-slot-hotbar-key">${i + 1}</span>` : '';
       bagHtml += `
-        <div class="inv-slot ${def ? 'has-item' : ''}"
+        <div class="inv-slot ${def ? 'has-item' : ''} ${isHotbar ? 'hotbar-slot' : ''}"
              style="--rarity-color: ${rarityColor}"
              data-bag="${i}" data-item="${def?.id || ''}">
+          ${hotbarKey}
           ${def ? `<span class="inv-slot-icon">${icon}</span>` : ''}
           ${count ? `<span class="inv-slot-count">${count}</span>` : ''}
         </div>
@@ -214,7 +224,7 @@ export class InventoryUI implements UIScreen {
           <div class="inv-equip-grid">${equipHtml}</div>
         </div>
         <div class="inv-bag">
-          <div class="inv-bag-title">Inventory (${this.inventory.slots.filter(s => s !== null).length}/${this.inventory.size})</div>
+        <div class="inv-bag-title">Inventory (${this.inventory.slots.filter(s => s !== null).length}/${this.inventory.size}) — <span style="color:rgba(212,168,67,0.6);font-size:11px">Top row = Hotbar</span></div>
           <div class="inv-bag-grid">${bagHtml}</div>
         </div>
       </div>
