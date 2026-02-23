@@ -179,24 +179,27 @@ class InputManager {
     this.keys.set(e.code, false);
   };
 
-  private onMouseMove = (e: MouseEvent): void => {
-    // Only accumulate mouse delta when in free-look or pointer-locked
-    if (this.isFreeLooking || document.pointerLockElement) {
+private onMouseMove = (e: MouseEvent): void => {
+    // Only accumulate mouse delta when in free-look or pointer-locked and UI is not blocking
+    if (!this.uiBlocked && (this.isFreeLooking || document.pointerLockElement)) {
       this.mouseDeltaX += e.movementX;
       this.mouseDeltaY += e.movementY;
     }
   };
 
-  private onMouseDown = (e: MouseEvent): void => {
+private onMouseDown = (e: MouseEvent): void => {
     if (e.button === 0) {
-      this.isFreeLooking = true;
-      // Also trigger attack if pointer is locked (action mode)
-      if (document.pointerLockElement) {
-        this._attackPressed = true;
-      }
-      // Request pointer lock on LMB press on canvas
-      if (this.canvas && !document.pointerLockElement) {
-        this.canvas.requestPointerLock();
+      const onCanvas = (this.canvas && e.target === this.canvas);
+      if (!this.uiBlocked && onCanvas) {
+        this.isFreeLooking = true;
+        // Also trigger attack if pointer is locked (action mode)
+        if (document.pointerLockElement) {
+          this._attackPressed = true;
+        }
+        // Request pointer lock only when clicking the canvas
+        if (!document.pointerLockElement) {
+          this.canvas!.requestPointerLock();
+        }
       }
     }
     if (e.button === 2) {

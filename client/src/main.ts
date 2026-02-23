@@ -449,6 +449,8 @@ function connectToServer() {
 /** Spawn the player locally when no game server is available */
 function offlineSpawn() {
   controller.setSpawn(0, 80, 0);
+  // Initialize camera after spawn so it points at the player immediately
+  tpCamera.teleport(controller.position, controller.yaw);
   const loadingEl = document.getElementById('loading');
   if (loadingEl) loadingEl.style.display = 'none';
   console.log('[Client] Offline mode — spawned at 0, 80, 0');
@@ -456,9 +458,11 @@ function offlineSpawn() {
 
 function handleServerMessage(msg: { type: string; data: any }) {
   switch (msg.type) {
-    case MessageType.WELCOME: {
+case MessageType.WELCOME: {
       playerId = msg.data.playerId;
       controller.setSpawn(msg.data.spawn.x, msg.data.spawn.y, msg.data.spawn.z);
+      // Initialize camera now that we have a real spawn position
+      tpCamera.teleport(controller.position, controller.yaw);
       console.log(`[Client] Spawned at ${msg.data.spawn.x}, ${msg.data.spawn.y}, ${msg.data.spawn.z}`);
 
       const loadingEl = document.getElementById('loading');
@@ -836,7 +840,7 @@ let gameLoopStarted = false;
 /** Enter the game world (called from main menu “Play” button) */
 function enterWorld() {
   console.log(`⚔ Grudge Warlords v0.1 ⚔ | ${grudgeAuth.displayName} [${grudgeAuth.method}]`);
-  tpCamera.teleport(controller.position, controller.yaw);
+  // Defer camera teleport until after we know the spawn (WELCOME message)
   connectToServer();
 
   // Show and initialize chat
