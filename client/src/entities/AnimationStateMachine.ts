@@ -13,6 +13,9 @@
 import * as THREE from 'three';
 import { assetLoader } from '../assets/AssetLoader.js';
 import type { LoadedCharacter, GLBAnimPackName } from '../assets/AssetLoader.js';
+import { AnimEventDispatcher } from './AnimationEvents.js';
+export type { AnimEventDef, AnimEventCallback } from './AnimationEvents.js';
+export { AnimEventType, AnimEventDispatcher } from './AnimationEvents.js';
 
 // ── Animation States ──────────────────────────────────────────────
 
@@ -236,6 +239,9 @@ export class AnimationStateMachine {
   /** Time remaining on current one-shot animation */
   private oneShotTimer = 0;
 
+  /** Animation event dispatcher — fires footstep, hit-frame, VFX, sound events */
+  readonly events: AnimEventDispatcher;
+
   /** External read: what state are we in? */
   get state(): AnimState { return this.currentState; }
 
@@ -247,6 +253,7 @@ export class AnimationStateMachine {
 
   constructor(character: LoadedCharacter) {
     this.character = character;
+    this.events = new AnimEventDispatcher();
 
     // Listen for animation finished events (for one-shot → returnTo)
     character.mixer.addEventListener('finished', (e: any) => {
@@ -262,6 +269,9 @@ export class AnimationStateMachine {
    */
   update(dt: number, input: AnimationInput): void {
     this.character.mixer.update(dt);
+
+    // Tick animation events (fires footstep/hit-frame/VFX callbacks)
+    this.events.tick(dt);
 
     // Count down one-shot timer
     if (this.oneShotTimer > 0) {
@@ -413,6 +423,10 @@ export class AnimationStateMachine {
     action.setEffectiveTimeScale(config.speed ?? 1.0);
     action.setEffectiveWeight(1);
 
+    // Compute effective clip duration for event system
+    const rawDuration = action.getClip()?.duration ?? 0;
+    const effectiveDuration = rawDuration / (config.speed ?? 1.0);
+
     if (config.loop) {
       action.setLoop(THREE.LoopRepeat, Infinity);
     } else {
@@ -420,10 +434,11 @@ export class AnimationStateMachine {
       action.clampWhenFinished = true;
 
       // Set one-shot timer from clip duration
-      if (action.getClip()) {
-        this.oneShotTimer = action.getClip().duration / (config.speed ?? 1.0);
-      }
+      this.oneShotTimer = effectiveDuration;
     }
+
+    // Notify event dispatcher of the new state
+    this.events.setState(newState, effectiveDuration, config.loop);
 
     // Crossfade from old action
     if (oldAction && oldAction !== action) {
@@ -499,6 +514,6 @@ export class AnimationStateMachine {
   // ── Debug ─────────────────────────────────────────────────────
 
   getDebugInfo(): string {
-    return `[${this.currentState}] weapon=${this.activeWeapon} combo=${this.comboIndex} locked=${this.isLocked}`;
+    return `[${this.currentState}] weapon=${this.activeWeapon} combo=${this.comboIndex} locked=${this.isLocked} ${this.events.getDebugInfo()}`;
   }
 }

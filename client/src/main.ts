@@ -7,18 +7,34 @@
 import * as THREE from 'three';
 import {
   CHUNK_SIZE, CHUNK_HEIGHT, RENDER_DISTANCE,
-  PLAYER_SPEED, SPRINT_MULTIPLIER, JUMP_VELOCITY, GRAVITY,
-  PLAYER_EYE_HEIGHT, PLAYER_HEIGHT, PLAYER_WIDTH, blockIndex,
-  MessageType,
+  blockIndex, MessageType,
 } from '@grudge/shared';
-import type { ChunkData, Vec3 } from '@grudge/shared';
+import type { ChunkData } from '@grudge/shared';
 import { buildChunkMesh, createPlaceholderAtlas, createVoxelMaterial } from './engine/VoxelRenderer.js';
+import { ChunkMeshPool } from './engine/ChunkMeshPool.js';
 import { assetLoader } from './assets/AssetLoader.js';
 import type { LoadedCharacter } from './assets/AssetLoader.js';
 import { CharacterController } from './entities/CharacterController.js';
 import { AnimationStateMachine } from './entities/AnimationStateMachine.js';
 import type { AnimationInput } from './entities/AnimationStateMachine.js';
+import { CombatSystem } from './combat/CombatSystem.js';
+import { HitboxSystem } from './combat/HitboxSystem.js';
+import { EntityManager } from './entities/EntityManager.js';
+import { TargetSystem } from './combat/TargetSystem.js';
+import { GameHUD } from './ui/GameHUD.js';
+import { BlockInteraction } from './world/BlockInteraction.js';
 import { grudgeAuth } from './auth/GrudgeAuth.js';
+import { inputManager } from './input/InputManager.js';
+import { ThirdPersonCamera } from './camera/ThirdPersonCamera.js';
+import { Inventory } from '@grudge/shared';
+import { UIManager, SCREEN } from './ui/UIManager.js';
+import { MainMenu } from './ui/MainMenu.js';
+import { CharacterCreate } from './ui/CharacterCreate.js';
+import { EscapeMenu } from './ui/EscapeMenu.js';
+import { SettingsPanel, loadSettings } from './ui/SettingsPanel.js';
+import type { GameSettings } from './ui/SettingsPanel.js';
+import { InventoryUI } from './ui/InventoryUI.js';
+import { ChatUI } from './ui/ChatUI.js';
 
 // ═══════════════════════════════════════════════════════════════════
 // THREE.JS SETUP
@@ -110,71 +126,111 @@ function attachCharacterModel(char: LoadedCharacter): void {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// THIRD-PERSON SHOULDER CAMERA
-// ═══════════════════════════════════════════════════════════════════
-
-// Camera offset: behind, slightly right, above shoulder (Dark Souls style)
-const CAM_OFFSET = new THREE.Vector3(0.8, 1.9, -3.5);  // right, up, behind
-const CAM_LOOK_OFFSET = new THREE.Vector3(0.3, 1.5, 0);  // look at point near right shoulder
-const CAM_MIN_DIST = 1.0;   // minimum camera distance when blocked by world
-const CAM_LERP_SPEED = 8.0; // smooth follow speed
-const CAM_COLLISION_PADDING = 0.3;
-
-// Current interpolated camera position
-const camCurrentPos = new THREE.Vector3();
-const camTargetPos = new THREE.Vector3();
-const camLookTarget = new THREE.Vector3();
-
-// ═══════════════════════════════════════════════════════════════════
-// PLAYER STATE
+// PLAYER STATE & INPUT
 // ═══════════════════════════════════════════════════════════════════
 
 let playerId = '';
 let animStateMachine: AnimationStateMachine | null = null;
+const combatSystem = new CombatSystem('WARRIOR');
+const hitboxSystem = new HitboxSystem();
+const entityManager = new EntityManager(scene);
+entityManager.setHitboxSystem(hitboxSystem);
+const targetSystem = new TargetSystem(entityManager);
+const gameHUD = new GameHUD();
+const blockInteraction = new BlockInteraction(scene, getBlockAtWorld);
+const playerInventory = new Inventory();
 
-// Input state
-const keys: Record<string, boolean> = {};
+// Give the player some starter items
+playerInventory.addItem('iron_sword');
+playerInventory.addItem('wooden_shield');
+playerInventory.addItem('leather_cap');
+playerInventory.addItem('leather_pants');
+playerInventory.addItem('health_potion', 5);
+playerInventory.addItem('mana_potion', 3);
 
-// Combat input edge detection (rising-edge triggers)
-let attackPressedThisFrame = false;
-let dodgePressedThisFrame = false;
-let castPressedThisFrame = false;
+// Attach input manager to the canvas
+inputManager.attach(renderer.domElement);
 
-document.addEventListener('keydown', (e) => {
-  keys[e.code] = true;
-  // Rising-edge combat inputs
-  if (e.code === 'KeyF' || e.code === 'Numpad0') attackPressedThisFrame = true;
-  if (e.code === 'KeyQ') dodgePressedThisFrame = true;
-  if (e.code === 'KeyR') castPressedThisFrame = true;
-});
-document.addEventListener('keyup', (e) => { keys[e.code] = false; });
+// ═══════════════════════════════════════════════════════════════════
+// UI SYSTEM — Menus, settings, inventory, chat
+// ═══════════════════════════════════════════════════════════════════
 
-// Pointer lock for mouse look
-renderer.domElement.addEventListener('click', () => {
-  renderer.domElement.requestPointerLock();
-});
+const uiManager = new UIManager();
+const chatUI = new ChatUI();
 
-document.addEventListener('mousemove', (e) => {
-  if (document.pointerLockElement === renderer.domElement) {
-    controller.yaw -= e.movementX * 0.003;
-    controller.pitch -= e.movementY * 0.003;
-    controller.pitch = Math.max(-1.2, Math.min(0.9, controller.pitch));
-  }
-});
+/** Apply settings changes to the renderer/camera */
+function applySettings(s: GameSettings): void {
+  camera.fov = s.fov;
+  camera.updateProjectionMatrix();
+  renderer.shadowMap.enabled = s.shadows;
+}
 
-// Left click = attack
-renderer.domElement.addEventListener('mousedown', (e) => {
-  if (e.button === 0 && document.pointerLockElement === renderer.domElement) {
-    attackPressedThisFrame = true;
-  }
-});
+// Build all UI screens (they register lazily — DOM elements only created on show())
+function buildUIScreens(): void {
+  const mainMenu = new MainMenu({
+    onPlay: () => {
+      uiManager.close(SCREEN.MAIN_MENU);
+      uiManager.inGame = true;
+      enterWorld();
+    },
+    onCharacter: () => {
+      uiManager.close(SCREEN.MAIN_MENU);
+      uiManager.open(SCREEN.CHARACTER_CREATE);
+    },
+    onSettings: () => {
+      uiManager.open(SCREEN.SETTINGS);
+    },
+    onLogout: () => {
+      grudgeAuth.signOut();
+      window.location.reload();
+    },
+  }, grudgeAuth.displayName, grudgeAuth.profile.playerClass, grudgeAuth.profile.level);
 
-// Mouse wheel to adjust camera distance
-let camDistMult = 1.0;
-document.addEventListener('wheel', (e) => {
-  camDistMult += e.deltaY * 0.001;
-  camDistMult = Math.max(0.4, Math.min(2.0, camDistMult));
-});
+  const charCreate = new CharacterCreate(
+    async (result) => {
+      await grudgeAuth.updateProfile({
+        playerClass: result.playerClass,
+        faction: result.faction,
+      });
+      mainMenu.updatePlayer(grudgeAuth.displayName, result.playerClass, grudgeAuth.profile.level);
+      uiManager.close(SCREEN.CHARACTER_CREATE);
+      uiManager.open(SCREEN.MAIN_MENU);
+    },
+    () => {
+      uiManager.close(SCREEN.CHARACTER_CREATE);
+      uiManager.open(SCREEN.MAIN_MENU);
+    },
+  );
+
+  const escapeMenu = new EscapeMenu({
+    onResume: () => uiManager.close(SCREEN.ESCAPE_MENU),
+    onSettings: () => uiManager.open(SCREEN.SETTINGS),
+    onLogout: () => {
+      uiManager.closeAll();
+      uiManager.inGame = false;
+      uiManager.open(SCREEN.MAIN_MENU);
+      // Disconnect WebSocket
+      if (ws) { ws.close(); ws = null; connected = false; }
+    },
+  });
+
+  const settingsPanel = new SettingsPanel(
+    () => uiManager.close(SCREEN.SETTINGS),
+    applySettings,
+  );
+
+  const inventoryUI = new InventoryUI(playerInventory, () => uiManager.close(SCREEN.INVENTORY));
+
+  uiManager.register(mainMenu);
+  uiManager.register(charCreate);
+  uiManager.register(escapeMenu);
+  uiManager.register(settingsPanel);
+  uiManager.register(inventoryUI);
+  uiManager.register(chatUI);
+}
+
+buildUIScreens();
+applySettings(loadSettings());
 
 // ═══════════════════════════════════════════════════════════════════
 // CHUNK MANAGEMENT
@@ -183,6 +239,9 @@ document.addEventListener('wheel', (e) => {
 const chunkMeshes = new Map<string, THREE.Mesh>();
 const chunkData = new Map<string, ChunkData>();
 let chunksLoaded = 0;
+
+// Worker pool for async off-main-thread meshing
+const meshPool = new ChunkMeshPool(scene, voxelMaterial, chunkData, chunkMeshes);
 
 function chunkKey(cx: number, cz: number): string {
   return `${cx},${cz}`;
@@ -202,8 +261,8 @@ function decompressChunk(compressed: Uint8Array): ChunkData {
   return data;
 }
 
-/** Add a chunk mesh to the scene */
-function addChunkMesh(cx: number, cz: number, data: ChunkData) {
+/** Build (or rebuild) one chunk mesh with neighbor data for seamless boundaries */
+function buildAndPlaceChunk(cx: number, cz: number, data: ChunkData): void {
   const key = chunkKey(cx, cz);
 
   // Remove old mesh if exists
@@ -211,11 +270,18 @@ function addChunkMesh(cx: number, cz: number, data: ChunkData) {
   if (oldMesh) {
     scene.remove(oldMesh);
     oldMesh.geometry.dispose();
+    chunkMeshes.delete(key);
   }
 
-  chunkData.set(key, data);
+  // Look up neighbor chunks for cross-boundary face culling
+  const neighborData = {
+    px: chunkData.get(chunkKey(cx + 1, cz)),
+    nx: chunkData.get(chunkKey(cx - 1, cz)),
+    pz: chunkData.get(chunkKey(cx, cz + 1)),
+    nz: chunkData.get(chunkKey(cx, cz - 1)),
+  };
 
-  const geometry = buildChunkMesh(data);
+  const geometry = buildChunkMesh(data, neighborData);
   if (!geometry) return;
 
   const mesh = new THREE.Mesh(geometry, voxelMaterial);
@@ -224,7 +290,23 @@ function addChunkMesh(cx: number, cz: number, data: ChunkData) {
 
   scene.add(mesh);
   chunkMeshes.set(key, mesh);
+}
+
+/** Add a chunk via worker pool (async) and rebuild neighbors */
+function addChunkMesh(cx: number, cz: number, data: ChunkData) {
+  chunkData.set(chunkKey(cx, cz), data);
   chunksLoaded++;
+
+  // Dispatch this chunk + neighbors to worker pool (non-blocking)
+  meshPool.requestMesh(cx, cz);
+
+  // Rebuild adjacent chunks that already exist (they now have a new neighbor)
+  const adj: [number, number][] = [[cx+1,cz],[cx-1,cz],[cx,cz+1],[cx,cz-1]];
+  for (const [ax, az] of adj) {
+    if (chunkData.has(chunkKey(ax, az))) {
+      meshPool.requestMesh(ax, az);
+    }
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -248,19 +330,26 @@ function isSolid(wx: number, wy: number, wz: number): boolean {
   return id > 0 && id !== 5; // Not air or water
 }
 
-// Create the character controller with block query callback
+// Create the character controller and camera
 const controller = new CharacterController(isSolid);
+const tpCamera = new ThirdPersonCamera(camera, isSolid);
 
-function updatePhysics(dt: number) {
-  const { yaw, pitch } = controller;
+import type { MovementInput, CombatInput } from './input/InputManager.js';
 
-  // Lock movement during one-shot animations (attacks, dodge, etc.)
+/** Last combat state snapshot — used by HUD in render section */
+let lastCombatState: ReturnType<typeof combatSystem.getState> = combatSystem.getState();
+
+/** Run one fixed-timestep physics + combat + animation tick */
+function physicsTick(dt: number, move: MovementInput, combat: CombatInput) {
   controller.movementLocked = animStateMachine?.isLocked ?? false;
 
-  // Run physics via controller
-  const state = controller.update(dt, keys);
+  // 1. Character physics
+  const state = controller.update(dt, move);
 
-  // Feed animation state machine
+  // 2. Combat system (gates actions through stamina, manages health/parry)
+  const combatState = combatSystem.update(dt, combat, state);
+
+  // 3. Animation state machine (combat-gated inputs)
   if (animStateMachine) {
     const animInput: AnimationInput = {
       moveSpeed: state.moveSpeed,
@@ -268,76 +357,18 @@ function updatePhysics(dt: number) {
       sprinting: state.isSprinting,
       onGround: state.onGround,
       velocityY: state.velocity.y,
-      attackPressed: attackPressedThisFrame,
-      blockHeld: !!keys['KeyE'],
-      dodgePressed: dodgePressedThisFrame,
-      castPressed: castPressedThisFrame,
-      isDead: false,
-      wasHit: false,
+      attackPressed: combatState.attackAllowed,
+      blockHeld: combatState.blockAllowed || combatState.isParrying,
+      dodgePressed: combatState.dodgeAllowed,
+      castPressed: combatState.castAllowed,
+      isDead: combatState.isDead,
+      wasHit: combatState.wasHit,
     };
     animStateMachine.update(dt, animInput);
   }
 
-  // Clear rising-edge triggers
-  attackPressedThisFrame = false;
-  dodgePressedThisFrame = false;
-  castPressedThisFrame = false;
-
-  // Position player model
-  const playerPos = state.position;
-  playerGroup.position.set(playerPos.x, playerPos.y, playerPos.z);
-  playerGroup.rotation.y = yaw;
-
-  // === THIRD-PERSON SHOULDER CAMERA ===
-
-  const pivotY = playerPos.y + CAM_LOOK_OFFSET.y;
-  const dist = CAM_OFFSET.z * camDistMult;
-  const rightOff = CAM_OFFSET.x * camDistMult;
-  const upOff = CAM_OFFSET.y;
-
-  const cosP = Math.cos(pitch);
-  const sinP = Math.sin(pitch);
-
-  camTargetPos.set(
-    playerPos.x + rightOff * Math.cos(yaw) + (-dist) * Math.sin(yaw) * cosP,
-    pivotY + upOff + (-dist) * sinP,
-    playerPos.z + rightOff * (-Math.sin(yaw)) + (-dist) * (-Math.cos(yaw)) * cosP,
-  );
-
-  // Camera collision raycast
-  const pivotPoint = new THREE.Vector3(playerPos.x, pivotY, playerPos.z);
-  const camDir = new THREE.Vector3().subVectors(camTargetPos, pivotPoint);
-  const maxDist = camDir.length();
-  camDir.normalize();
-
-  let safeDist = maxDist;
-  const rayStep = 0.3;
-  for (let d = rayStep; d < maxDist; d += rayStep) {
-    const rx = pivotPoint.x + camDir.x * d;
-    const ry = pivotPoint.y + camDir.y * d;
-    const rz = pivotPoint.z + camDir.z * d;
-    if (isSolid(rx, ry, rz)) {
-      safeDist = Math.max(CAM_MIN_DIST, d - CAM_COLLISION_PADDING);
-      break;
-    }
-  }
-
-  if (safeDist < maxDist) {
-    camTargetPos.copy(pivotPoint).addScaledVector(camDir, safeDist);
-  }
-
-  camCurrentPos.lerp(camTargetPos, Math.min(1, CAM_LERP_SPEED * dt));
-  camera.position.copy(camCurrentPos);
-
-  camLookTarget.set(
-    playerPos.x + CAM_LOOK_OFFSET.x * Math.cos(yaw) + 2 * Math.sin(yaw),
-    pivotY + pitch * 1.5,
-    playerPos.z + CAM_LOOK_OFFSET.x * (-Math.sin(yaw)) + 2 * (-Math.cos(yaw)),
-  );
-  camera.lookAt(camLookTarget);
-
-  sunLight.position.set(playerPos.x + 100, playerPos.y + 200, playerPos.z + 50);
-  sunLight.target.position.copy(playerPos);
+  // Keep latest combat state for HUD
+  lastCombatState = combatState;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -383,6 +414,13 @@ function connectToServer() {
       type: MessageType.JOIN,
       data: grudgeAuth.getJoinPayload(),
     }));
+
+    // Connect block interaction to network
+    blockInteraction.setSendFn((msg) => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(msg));
+      }
+    });
   };
 
   ws.onmessage = (event) => {
@@ -456,8 +494,85 @@ function handleServerMessage(msg: { type: string; data: any }) {
         const lx = ((x % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
         const lz = ((z % CHUNK_SIZE) + CHUNK_SIZE) % CHUNK_SIZE;
         chunk[blockIndex(lx, y, lz)] = blockId;
-        // Rebuild mesh
-        addChunkMesh(cx, cz, chunk);
+        // Rebuild mesh (with neighbor data)
+        buildAndPlaceChunk(cx, cz, chunk);
+      }
+      break;
+    }
+    case MessageType.PLAYER_JOIN: {
+      const { id, name, position } = msg.data;
+      if (id !== playerId) {
+        entityManager.spawn(id, 'player', name ?? `Player_${id.slice(0, 4)}`, {
+          position,
+          yaw: 0,
+          health: 250,
+          maxHealth: 250,
+        });
+        chatUI.addMessage(`${name ?? id} joined the world`, 'system');
+      }
+      break;
+    }
+    case MessageType.PLAYER_LEAVE: {
+      const { id } = msg.data;
+      entityManager.despawn(id);
+      chatUI.addMessage(`${id.slice(0, 8)} left the world`, 'system');
+      break;
+    }
+    case MessageType.CHAT_MSG: {
+      const { sender, text } = msg.data;
+      chatUI.addMessage(text, 'other', sender);
+      break;
+    }
+    case MessageType.WORLD_STATE: {
+      const { players: remotePlayers, tick } = msg.data;
+      const serverTime = tick * (1000 / 20); // Approx server time in ms
+      for (const rp of remotePlayers) {
+        entityManager.updateState(rp.id, {
+          position: rp.position,
+          yaw: rp.yaw,
+          health: rp.health,
+          maxHealth: rp.maxHealth,
+          timestamp: serverTime,
+        });
+      }
+      break;
+    }
+    case MessageType.MOB_STATE: {
+      const { mobs, tick } = msg.data;
+      const serverTime = tick * (1000 / 20);
+      // Track which mobs the server told us about
+      const activeMobIds = new Set<string>();
+      for (const mob of mobs) {
+        activeMobIds.add(mob.id);
+        const existing = entityManager.get(mob.id);
+        if (existing) {
+          // Update existing mob
+          entityManager.updateState(mob.id, {
+            position: mob.position,
+            yaw: mob.yaw,
+            health: mob.health,
+            maxHealth: mob.maxHealth,
+            animState: mob.aiState,
+            timestamp: serverTime,
+          });
+        } else {
+          // Spawn new mob entity
+          const entity = entityManager.spawn(mob.id, 'mob', mob.name, {
+            position: mob.position,
+            yaw: mob.yaw,
+            health: mob.health,
+            maxHealth: mob.maxHealth,
+            animState: mob.aiState,
+            timestamp: serverTime,
+          });
+          entity.level = mob.level;
+        }
+      }
+      // Despawn mobs no longer reported by server
+      for (const entity of entityManager.getAll()) {
+        if (entity.type === 'mob' && !activeMobIds.has(entity.id)) {
+          entityManager.despawn(entity.id);
+        }
       }
       break;
     }
@@ -473,49 +588,123 @@ function sendPositionUpdate() {
     data: {
       position: { x: p.x, y: p.y, z: p.z },
       yaw: controller.yaw,
-      pitch: controller.pitch,
     },
   }));
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// GAME LOOP
+// GAME LOOP — Fixed timestep physics + interpolated rendering
+//
+// Physics runs at a fixed 60 Hz regardless of display refresh rate.
+// The renderer interpolates the player position between the last two
+// physics snapshots so movement looks smooth at any framerate.
 // ═══════════════════════════════════════════════════════════════════
 
+const FIXED_DT = 1 / 60;           // 60 Hz physics
+const MAX_FRAME_TIME = 0.25;        // Cap to prevent spiral-of-death
 let lastTime = performance.now();
+let accumulator = 0;
 let frameCount = 0;
 let fpsTimer = 0;
 let currentFps = 0;
 let posUpdateTimer = 0;
 
+// Previous physics state for interpolation
+const prevPos = new THREE.Vector3();
+let prevYaw = 0;
+const renderPos = new THREE.Vector3();
+
 function gameLoop(time: number) {
   requestAnimationFrame(gameLoop);
 
-  const dt = Math.min((time - lastTime) / 1000, 0.1); // Cap dt to 100ms
+  const frameTime = Math.min((time - lastTime) / 1000, MAX_FRAME_TIME);
   lastTime = time;
+  accumulator += frameTime;
 
-  // Physics + animation (controller → animStateMachine)
-  updatePhysics(dt);
-
-  // Send position updates 10x/sec
-  posUpdateTimer += dt;
-  if (posUpdateTimer > 0.1) {
-    posUpdateTimer = 0;
-    sendPositionUpdate();
+  // ── UI key routing (before input read, so uiBlocked takes effect) ──
+  inputManager.uiBlocked = uiManager.isMenuOpen || chatUI.focused;
+  if (inputManager.escapePressed) uiManager.handleKey('Escape');
+  if (inputManager.iPressed) uiManager.handleKey('KeyI');
+  if (inputManager.enterPressed && uiManager.inGame && !uiManager.isMenuOpen) {
+    chatUI.toggleFocus();
   }
 
-  // Debug HUD: animation state + auth
-  const animEl = document.getElementById('anim');
-  if (animEl && animStateMachine) animEl.textContent = `Anim: ${animStateMachine.getDebugInfo()}`;
-  const authEl = document.getElementById('auth-status');
-  if (authEl) authEl.textContent = `Auth: ${grudgeAuth.displayName} (${grudgeAuth.method})`;
+  // ── Read input once per render frame ──
+  const move = inputManager.getMovement();
+  const combat = inputManager.getCombat();
+  const mouseDelta = inputManager.consumeMouseDelta();
+  const wheelDelta = inputManager.consumeWheelDelta();
+
+  // Combat rising-edge triggers (attack, dodge, cast) should only fire
+  // on the FIRST physics tick of each render frame.
+  let firstTick = true;
+
+  // ── Fixed-rate physics ticks ──
+  while (accumulator >= FIXED_DT) {
+    prevPos.copy(controller.position);
+    prevYaw = controller.yaw;
+
+    // First tick gets real rising-edge combat triggers; subsequent ticks don't
+    const tickCombat: CombatInput = firstTick
+      ? combat
+      : { attackPressed: false, blockHeld: combat.blockHeld, dodgePressed: false, castPressed: false };
+
+    physicsTick(FIXED_DT, move, tickCombat);
+    firstTick = false;
+    accumulator -= FIXED_DT;
+
+    // Network updates (10 Hz)
+    posUpdateTimer += FIXED_DT;
+    if (posUpdateTimer >= 0.1) {
+      posUpdateTimer = 0;
+      sendPositionUpdate();
+    }
+  }
+
+  // ── Interpolate for rendering ──
+  const alpha = accumulator / FIXED_DT;
+  renderPos.lerpVectors(prevPos, controller.position, alpha);
+  const renderYaw = prevYaw + (controller.yaw - prevYaw) * alpha;
+
+  playerGroup.position.copy(renderPos);
+  playerGroup.rotation.y = renderYaw;
+
+  // Tick all remote entities (interpolation, animation, hurtbox sync)
+  entityManager.update(frameTime, camera);
+
+  // Block interaction (raycast, mining, placement)
+  blockInteraction.update(
+    frameTime, camera, renderPos,
+    inputManager.held('KeyG'),            // G = mine
+    inputManager.held('KeyV'),            // V = place (single press TODO)
+    window.innerWidth, window.innerHeight,
+  );
+
+  // Tab-target cycling + nameplate rendering
+  targetSystem.update(
+    renderPos, inputManager.tabPressed, camera,
+    window.innerWidth, window.innerHeight,
+  );
+
+  // Camera uses interpolated position + per-frame mouse delta
+  tpCamera.update(frameTime, renderPos, renderYaw, inputManager.isFreeLooking, mouseDelta, wheelDelta);
+
+  // Move sun with player
+  sunLight.position.set(renderPos.x + 100, renderPos.y + 200, renderPos.z + 50);
+  sunLight.target.position.set(renderPos.x, renderPos.y, renderPos.z);
+
+  // Clear per-frame input triggers
+  inputManager.endFrame();
 
   // Render
   renderer.render(scene, camera);
 
+  // Update game HUD (player bars, target frame, combat log)
+  gameHUD.update(lastCombatState, targetSystem);
+
   // FPS counter
   frameCount++;
-  fpsTimer += dt;
+  fpsTimer += frameTime;
   if (fpsTimer >= 1) {
     currentFps = frameCount;
     frameCount = 0;
@@ -527,12 +716,20 @@ function gameLoop(time: number) {
   const posEl = document.getElementById('pos');
   const chunksEl = document.getElementById('chunks');
   const trisEl = document.getElementById('tris');
+  const animEl = document.getElementById('anim');
+  const combatEl = document.getElementById('combat');
+  const authEl = document.getElementById('auth-status');
 
   if (fpsEl) fpsEl.textContent = `FPS: ${currentFps}`;
   const p = controller.position;
   if (posEl) posEl.textContent = `Pos: ${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)}`;
   if (chunksEl) chunksEl.textContent = `Chunks: ${chunkMeshes.size}`;
   if (trisEl) trisEl.textContent = `Tris: ${renderer.info.render.triangles.toLocaleString()}`;
+  if (animEl && animStateMachine) animEl.textContent = `Anim: ${animStateMachine.getDebugInfo()}`;
+  if (combatEl) combatEl.textContent = combatSystem.getDebugInfo();
+  const entityEl = document.getElementById('entities');
+  if (entityEl) entityEl.textContent = entityManager.getDebugInfo();
+  if (authEl) authEl.textContent = `Auth: ${grudgeAuth.displayName} (${grudgeAuth.method})`;
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -545,13 +742,9 @@ window.addEventListener('resize', () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
-// ═══════════════════════════════════════════════════════════════════
-// START
-// ═══════════════════════════════════════════════════════════════════
-
-// ═══════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════
 // AUTH SCREEN LOGIC
-// ═══════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════
 
 function setupAuthScreen() {
   const authScreen = document.getElementById('auth-screen');
@@ -564,8 +757,8 @@ function setupAuthScreen() {
   const authMsg = document.getElementById('auth-msg');
 
   if (!authScreen) {
-    // No auth screen in HTML — just start
-    startGame();
+    // No auth screen in HTML — just go to main menu
+    showMainMenu();
     return;
   }
 
@@ -585,7 +778,7 @@ function setupAuthScreen() {
     const ok = await grudgeAuth.signInWithPuter();
     if (ok) {
       showMsg(`Welcome back, ${grudgeAuth.displayName}!`, true);
-      setTimeout(() => { hideAuth(); startGame(); }, 400);
+      setTimeout(() => { hideAuth(); showMainMenu(); }, 400);
     } else {
       showMsg('Grudge ID sign-in failed — try credentials or guest');
     }
@@ -598,7 +791,7 @@ function setupAuthScreen() {
     if (!u || !p) { showMsg('Enter username and password'); return; }
     showMsg('Logging in...');
     const ok = await grudgeAuth.loginWithCredentials(u, p);
-    if (ok) { hideAuth(); startGame(); }
+    if (ok) { hideAuth(); showMainMenu(); }
     else { showMsg('Login failed — check credentials or server status'); }
   });
 
@@ -609,7 +802,7 @@ function setupAuthScreen() {
     if (!u || !p) { showMsg('Enter username and password'); return; }
     showMsg('Creating account...');
     const ok = await grudgeAuth.register(u, p);
-    if (ok) { hideAuth(); startGame(); }
+    if (ok) { hideAuth(); showMainMenu(); }
     else { showMsg('Registration failed — name taken or server down'); }
   });
 
@@ -617,24 +810,55 @@ function setupAuthScreen() {
   guestBtn?.addEventListener('click', () => {
     grudgeAuth.enterGuestMode();
     hideAuth();
-    startGame();
+    showMainMenu();
   });
 }
 
-async function startGame() {
-  console.log(`⚔ Grudge Warlords v0.1 ⚔ | ${grudgeAuth.displayName} [${grudgeAuth.method}]`);
-  // Initialize camera position to avoid lerp-from-origin pop
-  camCurrentPos.copy(controller.position).add(new THREE.Vector3(0.8, 3.4, -3.5));
-  connectToServer();
-  requestAnimationFrame(gameLoop);
+/** Show the main menu after auth (or if no char, show char create first) */
+function showMainMenu() {
+  // Start the render loop if not already running
+  if (!gameLoopStarted) {
+    gameLoopStarted = true;
+    requestAnimationFrame(gameLoop);
+    loadPlayerAssets();
+  }
 
-  // Load real character model in background (box-biped shows until ready)
+  // If player has no class, go straight to character creation
+  if (!grudgeAuth.profile.playerClass) {
+    uiManager.open(SCREEN.CHARACTER_CREATE);
+  } else {
+    uiManager.open(SCREEN.MAIN_MENU);
+  }
+}
+
+let gameLoopStarted = false;
+
+/** Enter the game world (called from main menu “Play” button) */
+function enterWorld() {
+  console.log(`⚔ Grudge Warlords v0.1 ⚔ | ${grudgeAuth.displayName} [${grudgeAuth.method}]`);
+  tpCamera.teleport(controller.position, controller.yaw);
+  connectToServer();
+
+  // Show and initialize chat
+  chatUI.show();
+  chatUI.setSendFn((text) => {
+    if (ws && connected) {
+      ws.send(JSON.stringify({ type: MessageType.CHAT, data: { text } }));
+      chatUI.addMessage(text, 'player', grudgeAuth.displayName);
+    }
+  });
+
+  const loadingEl = document.getElementById('loading');
+  if (loadingEl) loadingEl.style.display = '';
+}
+
+/** Load character models and animations in background */
+async function loadPlayerAssets() {
   try {
     await assetLoader.init();
     const char = await assetLoader.loadToonCharacter('human');
     attachCharacterModel(char);
 
-    // Load base GLB animations and set up state machine
     await assetLoader.loadGLBAnimPack('base');
     animStateMachine = new AnimationStateMachine(char);
     console.log(`[Main] AnimStateMachine ready — GLB packs: ${assetLoader.getGLBAnimPacks().join(', ')}`);
@@ -643,9 +867,9 @@ async function startGame() {
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════
 // BOOT SEQUENCE
-// ═══════════════════════════════════════════════════════════════════
+// ═════════════════════════════════════════════════════════════════
 
 (async () => {
   // Try silent Grudge ID auth (existing Puter session)
@@ -655,7 +879,7 @@ async function startGame() {
     console.log(`[GrudgeAuth] Silent auth OK: ${grudgeAuth.displayName}`);
     const authScreen = document.getElementById('auth-screen');
     if (authScreen) authScreen.style.display = 'none';
-    startGame();
+    showMainMenu();
   } else {
     // Show Grudge ID login screen
     setupAuthScreen();

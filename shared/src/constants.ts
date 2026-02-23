@@ -53,3 +53,19 @@ export const JUMP_VELOCITY = 9;
 export const PLAYER_WIDTH = 0.6;
 export const PLAYER_HEIGHT = 1.8;
 export const PLAYER_EYE_HEIGHT = 1.62;
+
+/** Acceleration-based movement (blocks/s²) */
+export const PLAYER_ACCELERATION = 30;
+
+/** Drag coefficients (higher = faster stop) */
+export const PLAYER_GROUND_DRAG = 10;
+export const PLAYER_AIR_DRAG = 2;
+
+/** Character turn speed (radians/s effective via lerp) */
+export const PLAYER_TURN_SPEED = 10;
+
+/** Coyote time — grace period to jump after leaving ground (seconds) */
+export const COYOTE_TIME = 0.15;
+
+/** Jump buffer — press jump slightly before landing and it still registers (seconds) */
+export const JUMP_BUFFER_TIME = 0.1;

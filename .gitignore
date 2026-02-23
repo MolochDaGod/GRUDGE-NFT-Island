@@ -19,6 +19,10 @@ dist/
 Thumbs.db
 desktop.ini
 
+# Logs
+logs/
+server/logs/
+
 # Large asset library (466MB+ — use CDN or git-lfs for these)
 client/public/models/
 

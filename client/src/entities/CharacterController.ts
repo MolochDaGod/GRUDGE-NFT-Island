@@ -6,29 +6,32 @@
 //
 // PATTERN: The controller owns position/velocity/rotation and
 // exposes read-only state for the camera and animation systems.
-// Main.ts calls update(dt, keys) each frame and reads the results.
+//
+// Movement model ported from grudge-studio NPM CharacterController:
+//   - Acceleration-based (not instant velocity snap)
+//   - Ground drag / air drag for smooth stop
+//   - Coyote time + jump buffering
+//   - A/D = turn, Q/E = strafe, W/S = forward/back
 // ═══════════════════════════════════════════════════════════════════
 
 import * as THREE from 'three';
 import {
   PLAYER_SPEED, SPRINT_MULTIPLIER, JUMP_VELOCITY, GRAVITY,
-  PLAYER_EYE_HEIGHT,
+  PLAYER_EYE_HEIGHT, PLAYER_ACCELERATION, PLAYER_GROUND_DRAG,
+  PLAYER_AIR_DRAG, PLAYER_TURN_SPEED, COYOTE_TIME, JUMP_BUFFER_TIME,
 } from '@grudge/shared';
+import type { MovementInput } from '../input/InputManager.js';
 
 // ── Types ─────────────────────────────────────────────────────────
 
 /** Callback to test if a world-space block is solid */
 export type BlockQuery = (wx: number, wy: number, wz: number) => boolean;
 
-/** Key state map from input system */
-export type KeyMap = Record<string, boolean>;
-
 /** Read-only snapshot of controller state for other systems */
 export interface ControllerState {
   readonly position: THREE.Vector3;
   readonly velocity: THREE.Vector3;
   readonly yaw: number;
-  readonly pitch: number;
   readonly onGround: boolean;
   readonly isMoving: boolean;
   readonly isSprinting: boolean;
@@ -43,15 +46,14 @@ export class CharacterController {
   readonly position = new THREE.Vector3(0, 80, 0);
   readonly velocity = new THREE.Vector3(0, 0, 0);
 
-  // Rotation (managed by mouse input from main.ts)
+  // Character facing direction (radians)
   yaw = 0;
-  pitch = 0;
 
   // State flags
   onGround = false;
   spawnReady = false;
 
-  // Movement state (computed each frame, read by AnimationStateMachine)
+  // Movement state (computed each frame, read by camera + AnimationStateMachine)
   isMoving = false;
   isSprinting = false;
   moveSpeed = 0;
@@ -60,6 +62,12 @@ export class CharacterController {
   /** Is the controller locked out of movement? (e.g., during attack animation) */
   movementLocked = false;
 
+  // ── Coyote time + jump buffer ──────────────────────────────
+  private wasGrounded = false;
+  private coyoteTimer = 0;
+  private jumpBufferTimer = 0;
+  private isJumping = false;
+
   // Collision callback
   private isSolid: BlockQuery;
 
@@ -67,6 +75,7 @@ export class CharacterController {
   private _forward = new THREE.Vector3();
   private _right = new THREE.Vector3();
   private _moveDir = new THREE.Vector3();
+  private _horizontal = new THREE.Vector3();
 
   constructor(isSolid: BlockQuery) {
     this.isSolid = isSolid;
@@ -77,6 +86,7 @@ export class CharacterController {
   /** Set spawn position (from server WELCOME message) */
   setSpawn(x: number, y: number, z: number): void {
     this.position.set(x, y, z);
+    this.velocity.set(0, 0, 0);
     this.spawnReady = false;
   }
 
@@ -105,56 +115,110 @@ export class CharacterController {
   // ── Core Update ───────────────────────────────────────────────
 
   /**
-   * Run one frame of physics. Call from gameLoop.
-   * Returns the controller state snapshot for camera/animation.
+   * Run one frame of physics.
+   * @param dt      Delta time (seconds)
+   * @param move    Movement intent from InputManager
    */
-  update(dt: number, keys: KeyMap): ControllerState {
+  update(dt: number, move: MovementInput): ControllerState {
     // Wait for terrain before applying physics
     if (!this.checkSpawnReady()) {
       return this.getState();
     }
 
-    // Movement input
-    const speed = keys['ShiftLeft'] ? PLAYER_SPEED * SPRINT_MULTIPLIER : PLAYER_SPEED;
-    this.isSprinting = !!keys['ShiftLeft'];
+    // ── Coyote / jump buffer timers ──
+    this.wasGrounded = this.onGround;
+    // (onGround is updated at end of applyCollision)
 
+    if (this.wasGrounded && !this.onGround) {
+      this.coyoteTimer = COYOTE_TIME;
+    }
+    if (this.coyoteTimer > 0) this.coyoteTimer -= dt;
+    if (this.jumpBufferTimer > 0) this.jumpBufferTimer -= dt;
+
+    // Land detection
+    if (!this.wasGrounded && this.onGround && this.isJumping) {
+      this.isJumping = false;
+    }
+
+    // ── Turning (A/D rotate character yaw) ──
+    if (!this.movementLocked) {
+      if (move.turnLeft)  this.yaw += PLAYER_TURN_SPEED * dt;
+      if (move.turnRight) this.yaw -= PLAYER_TURN_SPEED * dt;
+    }
+
+    // ── Movement direction ──
+    this.isSprinting = move.sprint;
+    const targetSpeed = move.sprint ? PLAYER_SPEED * SPRINT_MULTIPLIER : PLAYER_SPEED;
+
+    // Forward/right relative to character facing
     this._forward.set(-Math.sin(this.yaw), 0, -Math.cos(this.yaw));
     this._right.set(Math.cos(this.yaw), 0, -Math.sin(this.yaw));
 
     this._moveDir.set(0, 0, 0);
-    const fwd = !!keys['KeyW'];
-    const back = !!keys['KeyS'];
-    const left = !!keys['KeyA'];
-    const right = !!keys['KeyD'];
-
     if (!this.movementLocked) {
-      if (fwd)   this._moveDir.add(this._forward);
-      if (back)  this._moveDir.sub(this._forward);
-      if (left)  this._moveDir.sub(this._right);
-      if (right) this._moveDir.add(this._right);
+      if (move.forward)      this._moveDir.add(this._forward);
+      if (move.back)         this._moveDir.sub(this._forward);
+      if (move.strafeLeft)   this._moveDir.sub(this._right);
+      if (move.strafeRight)  this._moveDir.add(this._right);
     }
 
-    this.movingBack = back && !fwd;
+    this.movingBack = move.back && !move.forward;
+
+    // ── Acceleration-based horizontal movement ──
+    const drag = this.onGround ? PLAYER_GROUND_DRAG : PLAYER_AIR_DRAG;
 
     if (this._moveDir.lengthSq() > 0) {
-      this._moveDir.normalize().multiplyScalar(speed);
+      this._moveDir.normalize();
+
+      // Accelerate toward move direction
+      this.velocity.x += this._moveDir.x * PLAYER_ACCELERATION * dt;
+      this.velocity.z += this._moveDir.z * PLAYER_ACCELERATION * dt;
+
+      // Clamp horizontal speed to target
+      this._horizontal.set(this.velocity.x, 0, this.velocity.z);
+      if (this._horizontal.length() > targetSpeed) {
+        this._horizontal.normalize().multiplyScalar(targetSpeed);
+        this.velocity.x = this._horizontal.x;
+        this.velocity.z = this._horizontal.z;
+      }
+    } else {
+      // Apply drag to stop
+      this.velocity.x -= this.velocity.x * drag * dt;
+      this.velocity.z -= this.velocity.z * drag * dt;
     }
 
-    this.velocity.x = this._moveDir.x;
-    this.velocity.z = this._moveDir.z;
-    this.moveSpeed = this._moveDir.length();
-    this.isMoving = this.moveSpeed > 0.1;
+    // Compute speed for animation system
+    this.moveSpeed = Math.sqrt(this.velocity.x * this.velocity.x + this.velocity.z * this.velocity.z);
+    this.isMoving = this.moveSpeed > 0.3;
 
-    // Jump
-    if (keys['Space'] && this.onGround && !this.movementLocked) {
+    // ── Jump (with coyote time + buffer) ──
+    if (move.jump && !this.movementLocked) {
+      if (this.onGround || this.coyoteTimer > 0) {
+        this.velocity.y = JUMP_VELOCITY;
+        this.isJumping = true;
+        this.onGround = false;
+        this.coyoteTimer = 0;
+      } else {
+        this.jumpBufferTimer = JUMP_BUFFER_TIME;
+      }
+    }
+
+    // Buffered jump fires on land
+    if (this.onGround && this.jumpBufferTimer > 0) {
       this.velocity.y = JUMP_VELOCITY;
+      this.isJumping = true;
       this.onGround = false;
+      this.jumpBufferTimer = 0;
     }
 
-    // Gravity
-    this.velocity.y += GRAVITY * dt;
+    // ── Gravity ──
+    if (!this.onGround) {
+      this.velocity.y += GRAVITY * dt;
+    } else if (this.velocity.y < 0) {
+      this.velocity.y = 0;
+    }
 
-    // Apply velocity with AABB collision
+    // ── Apply velocity with AABB collision ──
     this.applyCollision(dt);
 
     return this.getState();
@@ -215,7 +279,6 @@ export class CharacterController {
       position: this.position,
       velocity: this.velocity,
       yaw: this.yaw,
-      pitch: this.pitch,
       onGround: this.onGround,
       isMoving: this.isMoving,
       isSprinting: this.isSprinting,

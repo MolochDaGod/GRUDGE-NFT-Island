@@ -59,6 +59,7 @@ export enum MessageType {
   PLAYER_STATE = 'player_state',
   WORLD_STATE = 'world_state',
   BLOCK_UPDATE = 'block_update',
+  MOB_STATE = 'mob_state',
   CHAT_MSG = 'chat_msg',
 }
 

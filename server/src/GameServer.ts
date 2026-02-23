@@ -11,6 +11,7 @@ import {
 } from '../../shared/src/index.js';
 import type { PlayerState, InputState, Vec3, ChunkCoord } from '../../shared/src/index.js';
 import { WorldState } from './world/WorldState.js';
+import { MobSpawner } from './entities/MobSpawner.js';
 
 const PORT = 3000;
 const WORLD_SEED = 42069;
@@ -28,6 +29,7 @@ interface ConnectedPlayer {
 // --- Server state ---
 const world = new WorldState(WORLD_SEED);
 const players = new Map<string, ConnectedPlayer>();
+const mobSpawner = new MobSpawner(world);
 let tickCount = 0;
 
 // --- WebSocket Server ---
@@ -136,8 +138,18 @@ function handleMessage(playerId: string, msg: { type: string; data: unknown }) {
 
   switch (msg.type) {
     case MessageType.INPUT: {
-      player.lastInput = msg.data as InputState;
-      // For now, trust client position (add server-side validation later)
+      const input = msg.data as any;
+      player.lastInput = input as InputState;
+
+      // Trust client position for now (server-side validation TODO)
+      if (input.position) {
+        player.state.position.x = input.position.x;
+        player.state.position.y = input.position.y;
+        player.state.position.z = input.position.z;
+      }
+      if (input.yaw !== undefined) {
+        player.state.yaw = input.yaw;
+      }
       break;
     }
     case MessageType.BLOCK_BREAK: {
@@ -156,6 +168,16 @@ function handleMessage(playerId: string, msg: { type: string; data: unknown }) {
         type: MessageType.BLOCK_UPDATE,
         data: { x: Math.floor(x), y: Math.floor(y), z: Math.floor(z), blockId },
       });
+      break;
+    }
+    case MessageType.CHAT: {
+      const { text } = msg.data as { text: string };
+      if (!text || typeof text !== 'string' || text.length > 200) break;
+      broadcastExcept(playerId, {
+        type: MessageType.CHAT_MSG,
+        data: { sender: player.name, text },
+      });
+      console.log(`[Chat] ${player.name}: ${text}`);
       break;
     }
   }
@@ -234,7 +256,14 @@ function gameTick() {
     }
   }
 
-  // Broadcast player states (every other tick = 10 updates/sec)
+  // Tick mob spawner
+  const playerPositions = new Map<string, { x: number; y: number; z: number }>();
+  for (const [id, player] of players) {
+    playerPositions.set(id, { ...player.state.position });
+  }
+  mobSpawner.tick(TICK_MS / 1000, playerPositions);
+
+  // Broadcast player + mob states (every other tick = 10 updates/sec)
   if (tickCount % 2 === 0) {
     const states: PlayerState[] = [];
     for (const player of players.values()) {
@@ -243,6 +272,7 @@ function gameTick() {
 
     for (const player of players.values()) {
       if (player.ws.readyState === WebSocket.OPEN) {
+        // Player states
         send(player.ws, {
           type: MessageType.WORLD_STATE,
           data: {
@@ -250,6 +280,15 @@ function gameTick() {
             tick: tickCount,
           },
         });
+
+        // Mob states (only mobs near this player)
+        const mobs = mobSpawner.getStatesNear(player.state.position);
+        if (mobs.length > 0) {
+          send(player.ws, {
+            type: MessageType.MOB_STATE,
+            data: { mobs, tick: tickCount },
+          });
+        }
       }
     }
   }
@@ -261,7 +300,7 @@ function gameTick() {
       z: p.state.position.z,
     }));
     world.unloadDistantChunks(activePositions);
-    console.log(`[Server] Tick ${tickCount} | Players: ${players.size} | Chunks: ${world.loadedChunkCount}`);
+    console.log(`[Server] Tick ${tickCount} | Players: ${players.size} | Chunks: ${world.loadedChunkCount} | Mobs: ${mobSpawner.count}`);
   }
 }
 
