@@ -72,6 +72,7 @@ const CSS = `
 
 export interface MainMenuCallbacks {
   onPlay: () => void;
+  onBattleground: () => void;
   onCharacter: () => void;
   onSettings: () => void;
   onLogout: () => void;
@@ -130,6 +131,7 @@ export class MainMenu implements UIScreen {
       <div class="mm-player-badge"><span class="dot"></span>${this.playerName}${classStr} Lv.${this.playerLevel}</div>
       <div class="mm-buttons">
         <button class="mm-btn mm-btn-play" data-action="play">Enter World</button>
+        <button class="mm-btn mm-btn-secondary" data-action="battleground" style="background:linear-gradient(135deg,rgba(200,50,50,0.3),rgba(50,50,200,0.3));border:1px solid rgba(255,100,100,0.3)">⚔ Battleground</button>
         <button class="mm-btn mm-btn-secondary" data-action="character">Character</button>
         <button class="mm-btn mm-btn-secondary" data-action="settings">Settings</button>
         <button class="mm-btn mm-btn-logout" data-action="logout">Logout</button>
@@ -143,6 +145,7 @@ export class MainMenu implements UIScreen {
       if (!btn) return;
       const action = btn.dataset.action;
       if (action === 'play') this.callbacks.onPlay();
+      if (action === 'battleground') this.callbacks.onBattleground();
       if (action === 'character') this.callbacks.onCharacter();
       if (action === 'settings') this.callbacks.onSettings();
       if (action === 'logout') this.callbacks.onLogout();

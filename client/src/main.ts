@@ -15,9 +15,11 @@ import { Sky } from './engine/Sky.js';
 import { ChunkMeshPool } from './engine/ChunkMeshPool.js';
 import { assetLoader } from './assets/AssetLoader.js';
 import type { LoadedCharacter } from './assets/AssetLoader.js';
-import { CharacterController } from './entities/CharacterController.js';
 import { AnimationStateMachine } from './entities/AnimationStateMachine.js';
 import type { AnimationInput } from './entities/AnimationStateMachine.js';
+import { SketchCharacter } from './character/SketchCharacter.js';
+import type { ActionState } from './character/ICharacterState.js';
+import { Idle } from './character/states/Idle.js';
 import { CombatSystem } from './combat/CombatSystem.js';
 import { HitboxSystem } from './combat/HitboxSystem.js';
 import { EntityManager } from './entities/EntityManager.js';
@@ -38,6 +40,8 @@ import type { GameSettings } from './ui/SettingsPanel.js';
 import { InventoryUI } from './ui/InventoryUI.js';
 import { CuriosUI } from './ui/CuriosUI.js';
 import { ChatUI } from './ui/ChatUI.js';
+import { BattlegroundScene } from './battleground/BattlegroundScene.js';
+import { BattlegroundUI } from './battleground/BattlegroundUI.js';
 
 // ═══════════════════════════════════════════════════════════════════
 // THREE.JS SETUP
@@ -232,6 +236,10 @@ function buildUIScreens(): void {
       uiManager.inGame = true;
       enterWorld();
     },
+    onBattleground: () => {
+      uiManager.close(SCREEN.MAIN_MENU);
+      launchBattleground();
+    },
     onCharacter: () => {
       uiManager.close(SCREEN.MAIN_MENU);
       uiManager.open(SCREEN.CHARACTER_CREATE);
@@ -376,7 +384,7 @@ function addChunkMesh(cx: number, cz: number, data: ChunkData) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// PHYSICS (CLIENT-SIDE) — Delegated to CharacterController
+// PHYSICS (CLIENT-SIDE) — Delegated to SketchCharacter (spring-based)
 // ═══════════════════════════════════════════════════════════════════
 
 function getBlockAtWorld(wx: number, wy: number, wz: number): number {
@@ -396,33 +404,76 @@ function isSolid(wx: number, wy: number, wz: number): boolean {
   return id > 0 && id !== 5; // Not air or water
 }
 
-// Create the character controller and camera
-const controller = new CharacterController(isSolid);
+// Create the Sketchbook-style spring controller and camera
+const sketchChar = new SketchCharacter(isSolid);
+sketchChar.setState(new Idle(sketchChar));
 const tpCamera = new ThirdPersonCamera(camera, isSolid);
 
-import type { MovementInput, CombatInput } from './input/InputManager.js';
+import type { CombatInput } from './input/InputManager.js';
+
+// ── Action sync (InputManager → SketchCharacter) ──────────────────
+
+/** Sync a single action from held state, computing justPressed/justReleased */
+function syncAction(action: ActionState, pressed: boolean): void {
+  action.justPressed = pressed && !action.isPressed;
+  action.justReleased = !pressed && action.isPressed;
+  action.isPressed = pressed;
+}
+
+/** Map InputManager key state to SketchCharacter actions each frame */
+function feedActions(): void {
+  const a = sketchChar.actions;
+  const blocked = inputManager.uiBlocked;
+  const locked = animStateMachine?.isLocked ?? false;
+
+  // Movement (gated by UI block AND animation lock)
+  syncAction(a.up, !blocked && !locked && inputManager.held('KeyW'));
+  syncAction(a.down, !blocked && !locked && inputManager.held('KeyS'));
+  syncAction(a.left, !blocked && !locked && inputManager.held('KeyA'));
+  syncAction(a.right, !blocked && !locked && inputManager.held('KeyD'));
+  syncAction(a.run, !blocked && (inputManager.held('ShiftLeft') || inputManager.held('ShiftRight')));
+  syncAction(a.jump, !blocked && !locked && inputManager.held('Space'));
+
+  // Combat (gated by UI block only — CombatSystem handles its own gating)
+  syncAction(a.attack, !blocked && (inputManager.held('KeyF') || inputManager.held('Numpad0')));
+  syncAction(a.block, !blocked && inputManager.isRightMouseDown);
+  syncAction(a.dodge, !blocked && inputManager.held('KeyX'));
+  syncAction(a.cast, !blocked && inputManager.held('KeyR'));
+
+  // Notify current state of input changes (triggers state transitions)
+  if (sketchChar.charState) sketchChar.charState.onInputChange();
+}
 
 /** Last combat state snapshot — used by HUD in render section */
 let lastCombatState: ReturnType<typeof combatSystem.getState> = combatSystem.getState();
 
 /** Run one fixed-timestep physics + combat + animation tick */
-function physicsTick(dt: number, move: MovementInput, combat: CombatInput) {
-  controller.movementLocked = animStateMachine?.isLocked ?? false;
-
-  // 1. Character physics
-  const state = controller.update(dt, move);
+function physicsTick(dt: number, combat: CombatInput) {
+  // 1. Character physics (SketchCharacter: states → springs → voxel collision)
+  const snapshot = sketchChar.update(dt);
 
   // 2. Combat system (gates actions through stamina, manages health/parry)
-  const combatState = combatSystem.update(dt, combat, state);
+  //    ControllerState ← CharacterSnapshot (superset minus hitNormal)
+  const combatState = combatSystem.update(dt, combat, {
+    position: snapshot.position,
+    velocity: snapshot.velocity,
+    yaw: snapshot.yaw,
+    onGround: snapshot.onGround,
+    isMoving: snapshot.isMoving,
+    isSprinting: snapshot.isSprinting,
+    moveSpeed: snapshot.moveSpeed,
+    movingBack: snapshot.movingBack,
+    hitNormal: _zeroVec,
+  });
 
   // 3. Animation state machine (combat-gated inputs)
   if (animStateMachine) {
     const animInput: AnimationInput = {
-      moveSpeed: state.moveSpeed,
-      movingBack: state.movingBack,
-      sprinting: state.isSprinting,
-      onGround: state.onGround,
-      velocityY: state.velocity.y,
+      moveSpeed: snapshot.moveSpeed,
+      movingBack: snapshot.movingBack,
+      sprinting: snapshot.isSprinting,
+      onGround: snapshot.onGround,
+      velocityY: snapshot.velocity.y,
       attackPressed: combatState.attackAllowed,
       blockHeld: combatState.blockAllowed || combatState.isParrying,
       dodgePressed: combatState.dodgeAllowed,
@@ -436,6 +487,9 @@ function physicsTick(dt: number, move: MovementInput, combat: CombatInput) {
   // Keep latest combat state for HUD
   lastCombatState = combatState;
 }
+
+/** Reusable zero vector for hitNormal adapter */
+const _zeroVec = new THREE.Vector3();
 
 // ═══════════════════════════════════════════════════════════════════
 // WEBSOCKET CONNECTION
@@ -514,9 +568,9 @@ function connectToServer() {
 
 /** Spawn the player locally when no game server is available */
 function offlineSpawn() {
-  controller.setSpawn(0, 80, 0);
+  sketchChar.setSpawn(0, 80, 0);
   // Initialize camera after spawn so it points at the player immediately
-  tpCamera.teleport(controller.position, controller.yaw);
+  tpCamera.teleport(sketchChar.worldPosition, 0);
   const loadingEl = document.getElementById('loading');
   if (loadingEl) loadingEl.style.display = 'none';
   console.log('[Client] Offline mode — spawned at 0, 80, 0');
@@ -526,9 +580,9 @@ function handleServerMessage(msg: { type: string; data: any }) {
   switch (msg.type) {
 case MessageType.WELCOME: {
       playerId = msg.data.playerId;
-      controller.setSpawn(msg.data.spawn.x, msg.data.spawn.y, msg.data.spawn.z);
+      sketchChar.setSpawn(msg.data.spawn.x, msg.data.spawn.y, msg.data.spawn.z);
       // Initialize camera now that we have a real spawn position
-      tpCamera.teleport(controller.position, controller.yaw);
+      tpCamera.teleport(sketchChar.worldPosition, 0);
       console.log(`[Client] Spawned at ${msg.data.spawn.x}, ${msg.data.spawn.y}, ${msg.data.spawn.z}`);
 
       const loadingEl = document.getElementById('loading');
@@ -652,12 +706,12 @@ case MessageType.WELCOME: {
 // Send position updates to server
 function sendPositionUpdate() {
   if (!ws || !connected) return;
-  const p = controller.position;
+  const p = sketchChar.worldPosition;
   ws.send(JSON.stringify({
     type: MessageType.INPUT,
     data: {
       position: { x: p.x, y: p.y, z: p.z },
-      yaw: controller.yaw,
+      yaw: Math.atan2(sketchChar.orientation.x, sketchChar.orientation.z),
     },
   }));
 }
@@ -711,12 +765,19 @@ function gameLoop(time: number) {
 
   // Admin fly toggle (\ key)
   if (inputManager.adminTogglePressed && uiManager.inGame) {
-    controller.adminFly = !controller.adminFly;
-    console.log(`[Admin] Fly mode: ${controller.adminFly ? 'ON' : 'OFF'}`);
+    sketchChar.adminFly = !sketchChar.adminFly;
+    console.log(`[Admin] Fly mode: ${sketchChar.adminFly ? 'ON' : 'OFF'}`);
   }
 
-  // ── Read input once per render frame ──
-  const move = inputManager.getMovement();
+  // ── Sync InputManager → SketchCharacter actions (once per frame) ──
+  feedActions();
+
+  // Camera direction → SketchCharacter viewVector (for camera-relative movement)
+  const camDir = new THREE.Vector3();
+  camera.getWorldDirection(camDir);
+  sketchChar.setViewVector(camDir);
+
+  // ── Read remaining input ──
   const combat = inputManager.getCombat();
   const mouseDelta = inputManager.consumeMouseDelta();
   const wheelDelta = inputManager.consumeWheelDelta();
@@ -727,15 +788,15 @@ function gameLoop(time: number) {
 
   // ── Fixed-rate physics ticks ──
   while (accumulator >= FIXED_DT) {
-    prevPos.copy(controller.position);
-    prevYaw = controller.yaw;
+    prevPos.copy(sketchChar.worldPosition);
+    prevYaw = Math.atan2(sketchChar.orientation.x, sketchChar.orientation.z);
 
     // First tick gets real rising-edge combat triggers; subsequent ticks don't
     const tickCombat: CombatInput = firstTick
       ? combat
       : { attackPressed: false, blockHeld: combat.blockHeld, dodgePressed: false, castPressed: false };
 
-    physicsTick(FIXED_DT, move, tickCombat);
+    physicsTick(FIXED_DT, tickCombat);
     firstTick = false;
     accumulator -= FIXED_DT;
 
@@ -749,8 +810,9 @@ function gameLoop(time: number) {
 
   // ── Interpolate for rendering ──
   const alpha = accumulator / FIXED_DT;
-  renderPos.lerpVectors(prevPos, controller.position, alpha);
-  const renderYaw = prevYaw + (controller.yaw - prevYaw) * alpha;
+  const curYaw = Math.atan2(sketchChar.orientation.x, sketchChar.orientation.z);
+  renderPos.lerpVectors(prevPos, sketchChar.worldPosition, alpha);
+  const renderYaw = prevYaw + (curYaw - prevYaw) * alpha;
 
   playerGroup.position.copy(renderPos);
   playerGroup.rotation.y = renderYaw;
@@ -811,7 +873,7 @@ function gameLoop(time: number) {
   const authEl = document.getElementById('auth-status');
 
   if (fpsEl) fpsEl.textContent = `FPS: ${currentFps}`;
-  const p = controller.position;
+  const p = sketchChar.worldPosition;
   if (posEl) posEl.textContent = `Pos: ${p.x.toFixed(1)}, ${p.y.toFixed(1)}, ${p.z.toFixed(1)}`;
   if (chunksEl) chunksEl.textContent = `Chunks: ${chunkMeshes.size}`;
   if (trisEl) trisEl.textContent = `Tris: ${renderer.info.render.triangles.toLocaleString()}`;
@@ -821,7 +883,7 @@ function gameLoop(time: number) {
   if (entityEl) entityEl.textContent = entityManager.getDebugInfo();
   if (authEl) authEl.textContent = `Auth: ${grudgeAuth.displayName} (${grudgeAuth.method})`;
   const flyEl = document.getElementById('fly-mode');
-  if (flyEl) flyEl.textContent = controller.adminFly ? '✈ FLY MODE' : '';
+  if (flyEl) flyEl.textContent = sketchChar.adminFly ? '✈ FLY MODE' : '';
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -924,6 +986,57 @@ function showMainMenu() {
 }
 
 let gameLoopStarted = false;
+let battleground: BattlegroundScene | null = null;
+let battlegroundUI: BattlegroundUI | null = null;
+
+/** Launch the battleground game mode */
+async function launchBattleground() {
+  console.log('[Main] Launching Battleground mode...');
+
+  // Pause the main game loop rendering (battleground has its own loop)
+  const mainLoopWasActive = gameLoopStarted;
+
+  // Create battleground scene + UI
+  battleground = new BattlegroundScene(renderer, camera);
+  battlegroundUI = new BattlegroundUI();
+
+  battleground.onScoreUpdate = () => {
+    if (battleground && battlegroundUI) {
+      battlegroundUI.updateScores(battleground.getUnitCounts());
+    }
+  };
+
+  battlegroundUI.onExit = () => {
+    exitBattleground();
+  };
+
+  // Hide main scene objects
+  scene.visible = false;
+
+  try {
+    await battleground.init();
+    battleground.start();
+  } catch (e) {
+    console.error('[Main] Battleground init failed:', e);
+    exitBattleground();
+  }
+}
+
+/** Exit battleground and return to main menu */
+function exitBattleground() {
+  if (battleground) {
+    battleground.dispose();
+    battleground = null;
+  }
+  if (battlegroundUI) {
+    battlegroundUI.dispose();
+    battlegroundUI = null;
+  }
+
+  // Restore main scene
+  scene.visible = true;
+  uiManager.open(SCREEN.MAIN_MENU);
+}
 
 /** Enter the game world (called from main menu “Play” button) */
 function enterWorld() {
